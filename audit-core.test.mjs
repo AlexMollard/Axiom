@@ -91,6 +91,29 @@ test('section links preserve fragments and same-note anchors do not create graph
   assert.equal(graph.unresolvedCount, 0);
 });
 
+test('link resolution preserves path precedence and ambiguous aliases', () => {
+  const notes = [
+    {path: 'folder/Home.md', title: 'Home'},
+    {path: 'folder/Topic.md', title: 'Local'},
+    {path: 'Topic.md', title: 'Root'},
+    {path: 'folder/Space Name.md', title: 'Space Name'},
+    {path: 'elsewhere/Unique.md', title: 'Unique'},
+    {path: 'one/Foo.md', title: 'Shared'},
+    {path: 'two/Bar.md', title: 'SHARED'},
+    {path: 'Dupe.md', title: 'First'},
+    {path: 'dupe.MD', title: 'Second'},
+  ];
+  const content = '[[tOpIc]] [[/TOPIC]] [[Space%20Name?x#Heading]] [[unique]] [[shared]] [[dupe]] [[%ZZ]] [[https://example.com]]';
+  for (let i = 0; i < 2; i++) {
+    const graph = {targets: new Set(), unresolvedCount: 0};
+    const html = renderMarkdown(content, 'folder/Home.md', notes, graph);
+    assert.deepEqual([...graph.targets], ['folder/Topic.md', 'Topic.md', 'folder/Space Name.md', 'elsewhere/Unique.md']);
+    assert.equal(graph.unresolvedCount, 3);
+    assert.match(html, /href="\/\?note=folder%2FSpace%20Name.md#heading"/);
+    assert.doesNotMatch(html, /note=(?:one%2FFoo|two%2FBar|Dupe|dupe)/i);
+  }
+});
+
 test('heading ids use visible link, code and emphasis text and retain duplicate numbering', () => {
   const notes = [{path: 'Home.md', title: 'Home'}];
   const html = renderMarkdown('## [Install](https://example.com)\n## `Install`\n## *Install*\n[[#Install]]', 'Home.md', notes);

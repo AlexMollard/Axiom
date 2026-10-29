@@ -36,6 +36,24 @@ function noteHref(note, target, wiki = false) {
   return '/?note=' + encodeURIComponent(note.path) + (fragment ? '#' + encodeURIComponent(wiki ? headingSlug(decoded) : decoded) : '');
 }
 
+const noteIndexes = new WeakMap();
+function noteIndex(notes) {
+  let index = noteIndexes.get(notes);
+  if (index) return index;
+  index = { paths: new Map(), aliases: new Map() };
+  const add = (map, key, note) => map.set(key, map.has(key) ? null : note);
+  for (const note of notes) {
+    const fullPath = note.path.replace(/\.md$/i, '').toLowerCase();
+    const basename = note.path.split('/').pop().replace(/\.md$/i, '').toLowerCase();
+    const title = note.title.toLowerCase();
+    add(index.paths, fullPath, note);
+    add(index.aliases, basename, note);
+    if (title !== basename) add(index.aliases, title, note);
+  }
+  noteIndexes.set(notes, index);
+  return index;
+}
+
 function resolveNote(target, current, notes) {
   const clean = target.split('#')[0].split('?')[0].replace(/\\/g, '/');
   let decoded;
@@ -44,13 +62,12 @@ function resolveNote(target, current, notes) {
   const withoutExt = decoded.replace(/\.md$/i, '');
   const relative = path.posix.normalize(path.posix.join(path.posix.dirname(current), withoutExt)).replace(/^\.\//, '');
   const root = path.posix.normalize(withoutExt.replace(/^\//, ''));
-  const lookup = p => notes.filter(n => n.path.replace(/\.md$/i, '').toLowerCase() === p.toLowerCase());
-  const matches = decoded.startsWith('/') ? lookup(root) : lookup(relative);
-  if (matches.length === 1) return matches[0];
-  const rootMatches = lookup(root);
-  if (rootMatches.length === 1) return rootMatches[0];
-  const byName = notes.filter(n => n.path.split('/').pop().replace(/\.md$/i, '').toLowerCase() === root.toLowerCase() || n.title.toLowerCase() === root.toLowerCase());
-  return byName.length === 1 ? byName[0] : null;
+  const index = noteIndex(notes);
+  const match = index.paths.get((decoded.startsWith('/') ? root : relative).toLowerCase());
+  if (match) return match;
+  const rootMatch = index.paths.get(root.toLowerCase());
+  if (rootMatch) return rootMatch;
+  return index.aliases.get(root.toLowerCase()) || null;
 }
 
 export function renderMarkdown(content, current, notes, graph = null) {

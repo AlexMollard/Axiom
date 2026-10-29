@@ -115,6 +115,8 @@ export default function App() {
     const sameEditor = next.kind === 'note' && routeRef.current.kind === 'note' && next.path === routeRef.current.path && next.edit && routeRef.current.edit;
     if (!sameEditor && !bypass && !guard()) { setQuery(routeRef.current.kind === 'search' ? routeRef.current.query : ''); return false; }
     if (!sameEditor) dirty.current = false;
+    // Do not mount the destination until its catalogue request completes.
+    if (['kind', 'path', 'edit', 'id', 'mode'].some(key => next[key] !== routeRef.current[key])) setLoading(true);
     routeRef.current = next;
     if (mode !== 'none') history[mode === 'replace' ? 'replaceState' : 'pushState']({}, '', routeUrl(next));
     setQuery(next.kind === 'search' ? next.query : ''); setVisible(48); setRoute(next); return true;

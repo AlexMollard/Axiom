@@ -223,26 +223,33 @@ export async function search(config, query, {cwd = process.cwd(), limit = 12, al
   const reviews = await readReviews(config);
   const items = [];
   let total = 0;
-  for (const candidate of matches) {
+  for (let batchStart = 0; batchStart < matches.length;) {
     if (!all && items.length >= maximum) break;
+    const batch = matches.slice(batchStart, batchStart + (all ? 12 : 1));
+    batchStart += batch.length;
     // Cached text ranks candidates; filtering and returned evidence use fresh canonical text.
-    const {content, ...rawNote} = await readRawNote(config, candidate.path);
-    const note = applyReview(rawNote, reviews);
-    const text = content.toLowerCase();
-    const hit = words.find(word => text.includes(word) || note.title.toLowerCase().includes(word));
-    if (!hit || !eligible(note)) continue;
-    if (total >= start && items.length < maximum) {
-      let passage = content;
-      if (all) {
-        passage = passage.replace(/^---\r?\n[\s\S]*?\r?\n---(?:\r?\n|$)/, '').trimStart();
-        const heading = passage.match(/^#\s+([^\r\n]+)\r?\n/);
-        if (heading?.[1].trim() === note.title.trim()) passage = passage.slice(heading[0].length).trimStart();
-        passage = passage.replace(/^#{1,6}[ \t]+/gm, '');
+    const reads = await Promise.allSettled(batch.map(candidate => readRawNote(config, candidate.path)));
+    for (let i = 0; i < batch.length; i++) {
+      const candidate = batch[i];
+      if (reads[i].status === 'rejected') throw reads[i].reason;
+      const {content, ...rawNote} = reads[i].value;
+      const note = applyReview(rawNote, reviews);
+      const text = content.toLowerCase();
+      const hit = words.find(word => text.includes(word) || note.title.toLowerCase().includes(word));
+      if (!hit || !eligible(note)) continue;
+      if (total >= start && items.length < maximum) {
+        let passage = content;
+        if (all) {
+          passage = passage.replace(/^---\r?\n[\s\S]*?\r?\n---(?:\r?\n|$)/, '').trimStart();
+          const heading = passage.match(/^#\s+([^\r\n]+)\r?\n/);
+          if (heading?.[1].trim() === note.title.trim()) passage = passage.slice(heading[0].length).trimStart();
+          passage = passage.replace(/^#{1,6}[ \t]+/gm, '');
+        }
+        const index = passageMatch(passage, words)?.index ?? 0;
+        items.push({...note, excerpt: passage.slice(Math.max(0, index - 80), index + 420), score: candidate.score});
       }
-      const index = passageMatch(passage, words)?.index ?? 0;
-      items.push({...note, excerpt: passage.slice(Math.max(0, index - 80), index + 420), score: candidate.score});
+      total++;
     }
-    total++;
   }
   if (usage) await recordUsage(config, items, 'excerpt', usage.source);
   return {query, project, count: items.length, items, ...(all ? {total, hasMore: start + items.length < total} : {})};
