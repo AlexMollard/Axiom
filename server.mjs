@@ -1,8 +1,12 @@
 import http from 'node:http';
+import net from 'node:net';
 import { readFile } from 'node:fs/promises';
+import { mkdirSync, writeFileSync, appendFileSync, statSync, realpathSync } from 'node:fs';
+import os from 'node:os';
+import { format } from 'node:util';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
-import { randomBytes, timingSafeEqual } from 'node:crypto';
+import { createHash, randomBytes, timingSafeEqual } from 'node:crypto';
 import MarkdownIt from 'markdown-it';
 import sanitizeHtml from 'sanitize-html';
 import { catalog, readNote, search, loadConfig, backup, saveFromEditor, saveReviewFromEditor, hash } from './memory.mjs';
@@ -127,8 +131,9 @@ async function readJson(req) {
   return JSON.parse(Buffer.concat(chunks).toString('utf8'));
 }
 
-export function createServer(config) {
+export function createServer(config, configId = null) {
   const csrf = randomBytes(32);
+  const allowedHosts = new Set([`127.0.0.1:${config.port}`, `localhost:${config.port}`]);
   const server = http.createServer(async (req, res) => {
     const send = (status, type, body, extra = {}) => {
       res.writeHead(status, { ...headers, 'Content-Type': type, ...extra });
@@ -136,7 +141,6 @@ export function createServer(config) {
     };
     const json = (status, value) => send(status, 'application/json; charset=utf-8', JSON.stringify(value));
     const host = req.headers.host;
-    const allowedHosts = new Set([`127.0.0.1:${config.port}`, `localhost:${config.port}`]);
     if (!host || !allowedHosts.has(host.toLowerCase())) return json(403, { error: 'Invalid host' });
     if (req.headers.origin) {
       let origin;
@@ -188,9 +192,10 @@ export function createServer(config) {
       if (/^\/assets\/[a-zA-Z0-9_.-]+$/.test(url.pathname) || /^\/licenses\/(?:Manrope|JetBrains-Mono)-OFL\.txt$/.test(url.pathname)) {
         const type = assetTypes[path.extname(url.pathname)];
         if (!type) return json(404, { error: 'Not found' });
-        return send(200, type, await readFile(path.join(buildDir, url.pathname.slice(1))));
+        const hashed = /^\/assets\/[a-zA-Z0-9_.-]+-[a-zA-Z0-9_-]{8}\.(?:js|css|woff2)$/.test(url.pathname);
+        return send(200, type, await readFile(path.join(buildDir, url.pathname.slice(1))), hashed ? { 'Cache-Control': 'public, max-age=31536000, immutable' } : {});
       }
-      if (url.pathname === '/health') return json(200, { ok: true });
+      if (url.pathname === '/health') return json(200, configId ? { ok: true, pid: process.pid, configId, uptimeSeconds: process.uptime() } : { ok: true });
       if (url.pathname === '/api/catalog') {
         const { assignments: workspaceIcons } = await readWorkspaceIcons(config);
         const workspaceNames = {global: config.workspaceNames?.global || 'General', __unmapped: config.workspaceNames?.__unmapped || 'Unmapped', ...Object.fromEntries(config.projects.map(({id, name}) => [id, name || id]))};
@@ -226,18 +231,78 @@ export function createServer(config) {
       return json(Number.isInteger(error.status) ? error.status : 400, { error: error.message || 'Unable to load resource' });
     }
   });
+  server.on('listening', () => {
+    const address = server.address();
+    if (address && typeof address !== 'string') {
+      allowedHosts.clear();
+      allowedHosts.add(`127.0.0.1:${address.port}`);
+      allowedHosts.add(`localhost:${address.port}`);
+    }
+  });
   server.requestTimeout = 60000;
   server.headersTimeout = 15000;
   return server;
 }
 
-if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
-  const config = await loadConfig();
+let isEntrypoint = false;
+if (process.argv[1]) {
+  try { isEntrypoint = realpathSync.native(process.argv[1]) === realpathSync.native(fileURLToPath(import.meta.url)); }
+  catch { /* Imported with a missing or non-file argv entry. */ }
+}
+if (isEntrypoint) {
+  const requestedConfig = path.resolve(process.argv[2] || process.env.SHARED_BRAIN_CONFIG || path.join(process.env.LOCALAPPDATA || path.join(os.homedir(), '.config'), 'Axiom', 'config.json'));
+  let configPath;
+  try { configPath = realpathSync.native(requestedConfig); }
+  catch (error) {
+    if (error.code !== 'ENOENT') throw error;
+    configPath = path.join(realpathSync.native(path.dirname(requestedConfig)), path.basename(requestedConfig));
+  }
+  const identity = createHash('sha256').update(configPath.toLowerCase()).digest('hex');
+  const state = path.join(path.dirname(configPath), '.state', `runtime-${identity.slice(0, 16).toUpperCase()}`);
+  mkdirSync(state, { recursive: true });
+  // Retain bounded diagnostics even when the server is launched without a console.
+  const log = path.join(state, 'server.log');
+  for (const level of ['log', 'warn', 'error']) {
+    const original = console[level].bind(console);
+    console[level] = (...args) => {
+      const line = `${new Date().toISOString()} ${format(...args).replace(/\r?\n/g, '\r\n')}\r\n`;
+      try {
+        try { if (statSync(log).size + Buffer.byteLength(line) > 1024 * 1024) writeFileSync(log, ''); } catch (error) { if (error.code !== 'ENOENT') throw error; }
+        appendFileSync(log, Buffer.from(line).subarray(0, 1024 * 1024));
+      } catch (error) { original(`Could not write server log: ${error.message}`); }
+      original(...args);
+    };
+  }
+  process.on('warning', warning => console.warn(warning.stack || warning.message));
+  process.on('uncaughtException', error => {
+    console.error(error.stack || error.message);
+    process.exit(1);
+  });
+  process.on('unhandledRejection', error => {
+    console.error(error?.stack || String(error));
+    process.exit(1);
+  });
+  // libuv uses FILE_FLAG_FIRST_PIPE_INSTANCE; the kernel releases it on exit.
+  if (process.platform === 'win32') {
+    const guard = net.createServer(socket => socket.destroy());
+    await new Promise((resolve, reject) => {
+      guard.once('error', reject);
+      guard.listen(`\\\\.\\pipe\\axiom-${identity}`, resolve);
+    });
+  }
+  writeFileSync(path.join(state, 'server.pid'), `${process.pid}\r\n`);
+  const config = await loadConfig(configPath);
+  const server = createServer(config, identity.slice(0, 16).toUpperCase());
+  // The HTTP socket also rejects a conflicting listener on the configured port.
+  await new Promise((resolve, reject) => {
+    server.once('error', reject);
+    server.listen(config.port, '127.0.0.1', resolve);
+  });
   const save = async () => {
     const result = await backup(config);
     console.log(`Backup: ${result.snapshot} (${result.files} files)`);
   };
   await save();
   setInterval(() => save().catch(error => console.error(`BACKUP FAILED: ${error.message}`)), 24 * 60 * 60 * 1000).unref();
-  createServer(config).listen(config.port, '127.0.0.1', () => console.log(`Shared Brain: http://127.0.0.1:${config.port}`));
+  console.log(`Shared Brain: http://127.0.0.1:${config.port}`);
 }

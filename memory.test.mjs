@@ -4,9 +4,10 @@ import * as fs from 'node:fs/promises';
 import path from 'node:path';
 import os from 'node:os';
 import {get as httpGet} from 'node:http';
-import {spawnSync} from 'node:child_process';
+import {spawn, spawnSync} from 'node:child_process';
+import {once} from 'node:events';
 import {fileURLToPath} from 'node:url';
-import {loadConfig, catalog, readNote, writeNote, search, policies, backup, restore, isProtectedPath} from './memory.mjs';
+import {loadConfig, catalog, readNote, writeNote, search, policies, backup, restore, isProtectedPath, locked, hash} from './memory.mjs';
 import {createServer} from './server.mjs';
 import {serializeWorkspaceIcons} from './workspace-icons.mjs';
 
@@ -132,6 +133,65 @@ test('catalog reads current files and removes deleted entries without stale inde
   await fs.unlink(path.join(config.vault,'Agents','Memory','transient.md'));
   assert.equal((await search(config,'replacementneedle')).count,0);
   assert.equal((await catalog(config)).some(note=>note.title==='Transient'),false);
+});
+
+test('warm indexes revalidate replacements, isolate vaults and reflect completed edits under concurrency',async t=>{
+  const {config:first}=await fixture(t), {config:second}=await fixture(t);
+  const relative='Owner/Policies.md', file=path.join(first.vault,'Owner','Policies.md');
+  const initial=await catalog(first);
+  initial.find(note=>note.path===relative).title='caller mutation';
+  assert.equal((await catalog(first)).find(note=>note.path===relative).title,'Policies');
+  const saved=JSON.parse(await fs.readFile(first.indexPath,'utf8'));
+  saved.entries[relative].content='# Forged\r\nforgedneedle';
+  const replacement=first.indexPath+'.replacement';
+  await fs.writeFile(replacement,JSON.stringify(saved));
+  await fs.rename(replacement,first.indexPath);
+  assert.equal((await search(first,'forgedneedle')).count,0);
+  await fs.writeFile(path.join(second.vault,'Owner','Policies.md'),'# Other\r\nsecondvaultneedle');
+  assert.equal((await search(second,'secondvaultneedle')).count,1);
+  assert.equal((await search(first,'secondvaultneedle')).count,0);
+  await fs.writeFile(file,'# Updated\r\nconcurrentfreshneedle');
+  const results=await Promise.all([catalog(first),search(first,'concurrentfreshneedle'),search(first,'concurrentfreshneedle')]);
+  assert.equal(results[0].find(note=>note.path===relative).title,'Updated');
+  assert.equal(results[1].count,1);
+  assert.equal(results[2].count,1);
+  await fs.unlink(file);
+  assert.equal((await catalog(first)).some(note=>note.path===relative),false);
+});
+
+test('Windows recovers a killed lock owner while protecting live and malformed locks', {skip: process.platform !== 'win32'}, async t=>{
+  const {config}=await fixture(t);
+  const lockPath=path.join(os.tmpdir(),`shared-brain-${hash(config.vault).slice(0,20)}.lock`);
+  t.after(()=>fs.rm(lockPath,{force:true}));
+  const moduleUrl=new URL('./memory.mjs',import.meta.url).href;
+  const script=`import {locked} from ${JSON.stringify(moduleUrl)}; const config=JSON.parse(process.env.TEST_LOCK_CONFIG); await locked(config,async()=>{ console.log('ready'); await new Promise(()=>setInterval(()=>{},1000)); });`;
+  async function owner() {
+    const child=spawn(process.execPath,['--input-type=module','-e',script],{env:{...process.env,TEST_LOCK_CONFIG:JSON.stringify(config)},stdio:['ignore','pipe','pipe']});
+    t.after(()=>{ if (child.exitCode === null && child.signalCode === null) child.kill('SIGKILL'); });
+    await new Promise((resolve,reject)=>{
+      child.stdout.once('data',resolve);
+      child.once('error',reject);
+      child.once('exit',()=>reject(new Error('Lock owner exited before becoming ready')));
+    });
+    return child;
+  }
+  const child=await owner();
+  await assert.rejects(locked(config,async()=>{}),/Another memory operation/);
+  const exited=once(child,'exit'); child.kill('SIGKILL'); await exited;
+  let release, entered;
+  const gate=new Promise(resolve=>{release=resolve;});
+  const acquired=new Promise(resolve=>{entered=resolve;});
+  const attempt=()=>locked(config,async()=>{entered(); await gate; return 'recovered';});
+  const attempts=[attempt(),attempt()].map(promise=>promise.then(value=>({value}),error=>({error})));
+  await acquired;
+  const rejected=await Promise.race(attempts);
+  assert.match(rejected.error?.message || '',/Another memory operation/);
+  release();
+  const outcomes=await Promise.all(attempts);
+  assert.equal(outcomes.filter(result=>result.value === 'recovered').length,1);
+  await fs.writeFile(lockPath,'not valid metadata');
+  await assert.rejects(locked(config,async()=>{}),/Another memory operation/);
+  assert.equal(await fs.readFile(lockPath,'utf8'),'not valid metadata');
 });
 
 test('rendered wikilinks remain navigable and note HTML cannot execute active content',async t=>{

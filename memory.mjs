@@ -2,6 +2,7 @@
 import * as fs from 'node:fs/promises';
 import path from 'node:path';
 import os from 'node:os';
+import net from 'node:net';
 import { createHash, randomUUID } from 'node:crypto';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import {WORKSPACE_ICONS_PATH, readWorkspaceIcons, searchWorkspaceIcons, parseWorkspaceIcons, serializeWorkspaceIcons, validateWorkspaceIcons} from './workspace-icons.mjs';
@@ -103,13 +104,28 @@ export async function readNote(config, relative, usage = null) {
   if (usage) await recordUsage(config, [note], 'read', usage.source);
   return note;
 }
+// Retain at most one validated derivative, capped by its serialized size. Disk
+// identity and every vault entry are still checked on each request.
+let warmIndex = null;
+const MAX_WARM_INDEX_BYTES = 32 * 1024 * 1024;
+const indexIdentity = stat => `${stat.dev}:${stat.ino}:${stat.size}:${stat.mtimeMs}:${stat.ctimeMs}`;
+
 
 async function indexedNotes(config) {
   const indexPath = config.indexPath || path.join(config.backupDir, '.index.json');
-  let previous = {};
+  let previous = {}, trusted = false, diskIdentity = null;
   try {
-    const saved = JSON.parse(await fs.readFile(indexPath, 'utf8'));
-    if (saved.version === 2 && saved.vault === config.vault && saved.entries && typeof saved.entries === 'object') previous = saved.entries;
+    const stat = await fs.stat(indexPath), before = indexIdentity(stat);
+    if (warmIndex?.indexPath === path.resolve(indexPath) && warmIndex.vault === config.vault && warmIndex.identity === before) {
+      previous = warmIndex.entries;
+      trusted = true;
+      diskIdentity = stat.size <= MAX_WARM_INDEX_BYTES ? before : null;
+    } else {
+      const saved = JSON.parse(await fs.readFile(indexPath, 'utf8'));
+      const after = indexIdentity(await fs.stat(indexPath));
+      if (before === after && stat.size <= MAX_WARM_INDEX_BYTES) diskIdentity = after;
+      if (saved.version === 2 && saved.vault === config.vault && saved.entries && typeof saved.entries === 'object') previous = saved.entries;
+    }
   } catch (error) {
     if (!missing(error)) console.warn(`Shared Brain: rebuilding derivative index: ${error.message}`);
   }
@@ -134,7 +150,7 @@ async function indexedNotes(config) {
       if (!stat.isFile() || stat.isSymbolicLink()) throw new Error('A vault path changed while indexing; retry the read.');
       const signature = `${stat.mtimeMs}:${stat.ctimeMs}:${stat.size}`;
       const old = previous[relative];
-      if (old?.signature === signature && typeof old.content === 'string' && old.note?.path === relative && hash(old.content) === old.note.revision) {
+      if (old?.signature === signature && typeof old.content === 'string' && old.note?.path === relative && (trusted || hash(old.content) === old.note.revision)) {
         entries[relative] = old;
       } else {
         const {content, ...note} = await readRawNote(config, relative);
@@ -148,19 +164,26 @@ async function indexedNotes(config) {
     try {
       await fs.mkdir(path.dirname(indexPath), {recursive: true});
       await fs.writeFile(temporary, JSON.stringify({version: 2, vault: config.vault, entries}), {flag: 'wx'});
+      const written = await fs.stat(temporary);
       await fs.rename(temporary, indexPath);
+      const destination = await fs.stat(indexPath);
+      diskIdentity = written.ino && written.dev === destination.dev && written.ino === destination.ino &&
+        written.size === destination.size && written.mtimeMs === destination.mtimeMs && written.size <= MAX_WARM_INDEX_BYTES
+        ? indexIdentity(destination) : null;
     } catch (error) {
+      diskIdentity = null;
       console.warn(`Shared Brain: derivative index could not be persisted; using memory: ${error.message}`);
     } finally {
       await fs.rm(temporary, {force: true}).catch(() => {});
     }
   }
+  warmIndex = diskIdentity === null ? null : {indexPath: path.resolve(indexPath), vault: config.vault, identity: diskIdentity, entries};
   return Object.values(entries);
 }
 
 export async function catalog(config) {
   const reviews = await readReviews(config);
-  return (await indexedNotes(config)).map(entry => applyReview(entry.note, reviews)).sort((a, b) => a.path.localeCompare(b.path));
+  return (await indexedNotes(config)).map(entry => applyReview({...entry.note, ...(Array.isArray(entry.note.links) ? {links: [...entry.note.links]} : {})}, reviews)).sort((a, b) => a.path.localeCompare(b.path));
 }
 
 function queryWords(query) {
@@ -279,11 +302,81 @@ export function isProtectedPath(config, candidate, cwd = process.cwd()) {
 
 async function locked(config, action) {
   const lockPath = path.join(os.tmpdir(), `shared-brain-${hash(config.vault).slice(0, 20)}.lock`);
-  let lock;
-  try { lock = await fs.open(lockPath, 'wx'); }
-  catch (error) { if (error.code === 'EEXIST') throw new Error(`Another memory operation holds ${lockPath}. If its process has exited, remove the stale lock manually.`); throw error; }
-  try { await lock.writeFile(JSON.stringify({pid: process.pid, started: new Date().toISOString()})); return await action(); }
-  finally { await lock.close(); await fs.unlink(lockPath); }
+  const held = () => new Error(`Another memory operation holds ${lockPath}. If its process has exited, remove the stale lock manually.`);
+  let guard, lock;
+  try {
+    if (process.platform === 'win32') {
+      const vault = await fs.realpath(config.vault);
+      guard = net.createServer(socket => socket.destroy());
+      try {
+        await new Promise((resolve, reject) => {
+          guard.once('error', reject);
+          guard.listen(`\\\\.\\pipe\\shared-brain-lock-${hash(vault.toLowerCase()).slice(0, 32)}`, resolve);
+        });
+      } catch (error) {
+        guard = null;
+        if (error.code === 'EADDRINUSE' || error.code === 'EACCES') throw held();
+        throw error;
+      }
+    }
+    const acquire = async () => {
+      if (!guard) {
+        lock = await fs.open(lockPath, 'wx');
+        await lock.writeFile(JSON.stringify({pid: process.pid, started: new Date().toISOString()}));
+        return;
+      }
+      const temporary = `${lockPath}.${randomUUID()}.tmp`;
+      let candidate;
+      try {
+        candidate = await fs.open(temporary, 'wx');
+        await candidate.writeFile(JSON.stringify({pid: process.pid, started: new Date().toISOString()}));
+        await fs.link(temporary, lockPath);
+        lock = candidate;
+        candidate = null;
+      } finally {
+        if (candidate) await candidate.close();
+        await fs.rm(temporary, {force: true});
+      }
+    };
+    try { await acquire(); }
+    catch (error) {
+      if (error.code !== 'EEXIST') throw error;
+      if (!guard) throw held();
+      let stale;
+      try {
+        const handle = await fs.open(lockPath, 'r');
+        try {
+          const before = await handle.stat(), text = await handle.readFile('utf8'), after = await handle.stat();
+          const data = JSON.parse(text);
+          if (!before.isFile() || !before.ino || indexIdentity(before) !== indexIdentity(after) ||
+              !Number.isSafeInteger(data.pid) || data.pid <= 0 || data.pid > 2147483647) throw held();
+          try { process.kill(data.pid, 0); throw held(); }
+          catch (probe) { if (probe.code !== 'ESRCH') throw held(); }
+          const current = await fs.stat(lockPath);
+          if (indexIdentity(current) !== indexIdentity(after) || await fs.readFile(lockPath, 'utf8') !== text) throw held();
+          stale = true;
+        } finally { await handle.close(); }
+      } catch { throw held(); }
+      if (!stale) throw held();
+      await fs.unlink(lockPath);
+      try { await acquire(); }
+      catch (acquireError) { if (acquireError.code === 'EEXIST') throw held(); throw acquireError; }
+    }
+    return await action();
+  } finally {
+    try {
+      if (lock) {
+        const owned = await lock.stat();
+        await lock.close();
+        try {
+          const current = await fs.stat(lockPath);
+          if ((owned.ino && owned.dev === current.dev && owned.ino === current.ino) || (process.platform !== 'win32' && !owned.ino)) await fs.unlink(lockPath);
+        } catch (error) { if (!missing(error)) throw error; }
+      }
+    } finally {
+      if (guard) await new Promise((resolve, reject) => guard.close(error => error ? reject(error) : resolve()));
+    }
+  }
 }
 
 export async function writeNote(config, relative, content, expectedRevision, workspaceIcon) {
