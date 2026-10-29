@@ -15,11 +15,12 @@ Axiom brings personal notes, project decisions and coding-agent memory into one 
 | | What you can do |
 | --- | --- |
 | **A workspace, not a file dump** | Organize projects with groups, Lucide icons and pinned notes. Open the dashboard, search the vault or jump through the command palette. |
-| **Markdown, with a proper editor** | Write with live preview in the browser, or open a note in Obsidian. The canonical notes stay ordinary files. |
+| **Markdown, with a proper editor** | Write with live preview and recoverable local drafts, inspect prior versions, or open a note in Obsidian. The canonical notes stay ordinary files. |
 | **Connections you can explore** | Follow backlinks and workspace knowledge graphs. Pan, zoom, search and inspect a note's connections. |
 | **A review workflow for agent memory** | See new and changed findings, compare revisions, and review the exact content you checked. Later edits invalidate that approval. |
-| **Context across connected tools** | Use native Claude Code and omp integrations, plus a CLI for other explicitly configured harnesses. |
+| **Context across connected tools** | Use native Claude Code and omp integrations, the guarded MCP server for explicitly configured clients, or the CLI. |
 | **Evidence, not imaginary certainty** | Inspect recorded memory deliveries, provenance and cleanup candidates. Quiet history is not proof that a note is disposable. |
+| **Find the useful passage** | Full-text ranking supports short technical terms and section links. Inspect replacement chains, recorded conflicts and possible overlaps before adding another finding. |
 
 ## You own the rules
 
@@ -43,7 +44,7 @@ The supported setup is **Windows with Node.js 22.13+ and PowerShell 7**. Bun and
 
 Axiom opens at its configured loopback address and registers hidden, current-user sign-in startup with bounded health recovery. Use the URL printed by the launcher.
 
-Other harnesses need explicit integration; choosing a model does not automatically connect it to your vault. Axiom is not a full replacement for Obsidian or its plugin ecosystem.
+Other harnesses need explicit integration; choosing a model does not automatically connect it to your vault. Semantic models are not required or loaded by default. Axiom is not a full replacement for Obsidian or its plugin ecosystem.
 
 ## Documentation
 

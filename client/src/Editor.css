@@ -27,6 +27,11 @@
 .editor-status { color: var(--muted); font-size: .75rem; text-align: right; }
 .editor-alert { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; margin-bottom: 12px; padding: 12px; border: 1px solid var(--accent-border); border-radius: 8px; background: var(--error-surface); color: var(--error); font-size: .8rem; line-height: 1.5; }
 .editor-alert span { flex: 1 1 220px; }
+.editor-comparison { margin-bottom: 12px; padding: 12px; border: 1px solid var(--border); border-radius: 8px; color: var(--fg-secondary); font-size: .8rem; }
+.editor-comparison > div { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 280px), 1fr)); gap: 12px; }
+.editor-comparison section { min-width: 0; }
+.editor-comparison h2 { font-size: .85rem; }
+.editor-comparison pre { max-height: 300px; overflow: auto; padding: 12px; background: var(--surface-inset); white-space: pre-wrap; overflow-wrap: anywhere; }
 .editor-workspace { display: grid; grid-template-columns: minmax(0, 1fr); border: 1px solid var(--border); border-radius: 10px; overflow: hidden; background: var(--surface-inset); }
 .editor-workspace-split { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); }
 .editor-pane { min-width: 0; min-height: 500px; }

@@ -9,6 +9,7 @@ import {WORKSPACE_ICONS_PATH, readWorkspaceIcons, searchWorkspaceIcons, parseWor
 import {REVIEW_LEDGER_PATH, validateAgentNotePath, parseReviewLedger, serializeReviewLedger, applyReview} from './note-reviews.mjs';
 import {preserveReviewedRevision} from './review-history.mjs';
 import {recordUsage} from './note-usage.mjs';
+import {queryWords, lexicalTerms, rankEntries, passageEvidence} from './search-index.mjs';
 
 const appDir = path.dirname(fileURLToPath(import.meta.url));
 const hash = value => createHash('sha256').update(value).digest('hex');
@@ -186,13 +187,10 @@ export async function catalog(config) {
   return (await indexedNotes(config)).map(entry => applyReview({...entry.note, ...(Array.isArray(entry.note.links) ? {links: [...entry.note.links]} : {})}, reviews)).sort((a, b) => a.path.localeCompare(b.path));
 }
 
-function queryWords(query) {
-  return [...new Set(String(query).toLowerCase().match(/[\p{L}\p{N}_-]{3,}/gu) || [])].filter(word => !['the','and','for','this','that','with','from','have','please','what','how','can','you'].includes(word));
-}
 function passageMatch(content, words) {
-  for (const word of words) {
-    const match = new RegExp(word.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'iu').exec(content);
-    if (match) return match;
+  const wanted = new Set(words);
+  for (const match of content.matchAll(/[\p{L}\p{N}][\p{L}\p{N}\p{M}+#]*/gu)) {
+    if (lexicalTerms(match[0]).some(word => wanted.has(word))) return {index: match.index, end: match.index + match[0].length};
   }
   return null;
 }
@@ -205,21 +203,13 @@ export async function search(config, query, {cwd = process.cwd(), limit = 12, al
   const start = Math.max(0, Math.floor(Number(offset) || 0));
   const projects = new Set(config.projects.map(item => item.id));
   const eligible = note => (all || ['global', project].includes(note.project)) &&
-    (includeInactive || (!['superseded','archived'].includes((note.status || '').toLowerCase()) &&
+    (includeInactive || (!['superseded','archived','stale','retired'].includes((note.status || '').toLowerCase()) &&
     !note.path.startsWith('Agents/Handovers/') && !note.path.startsWith('Agents/Proposals/'))) &&
     (!workspace || workspace === 'all' || (workspace === '__unmapped' ? note.project !== 'global' && !projects.has(note.project) : note.project === workspace)) &&
     (!owner || owner === 'all' || note.owner === owner) &&
     (!review || review === 'all' || note.reviewStatus === review);
-  const matches = [];
-  for (const {note, content} of await indexedNotes(config)) {
-    if (!all && !['global', project].includes(note.project)) continue;
-    const text = content.toLowerCase();
-    const hits = words.filter(word => text.includes(word) || note.title.toLowerCase().includes(word));
-    if (!hits.length) continue;
-    const score = hits.length / words.length * 10 + hits.filter(word => note.title.toLowerCase().includes(word)).length + (text.includes(String(query).toLowerCase().trim()) ? 5 : 0);
-    matches.push({path: note.path, score});
-  }
-  matches.sort((a, b) => b.score - a.score || a.path.localeCompare(b.path));
+  const entries = (await indexedNotes(config)).filter(({note}) => all || ['global', project].includes(note.project));
+  const matches = await rankEntries(entries, words, JSON.stringify([config.vault, all ? 'all' : project]));
   const reviews = await readReviews(config);
   const items = [];
   let total = 0;
@@ -227,26 +217,18 @@ export async function search(config, query, {cwd = process.cwd(), limit = 12, al
     if (!all && items.length >= maximum) break;
     const batch = matches.slice(batchStart, batchStart + (all ? 12 : 1));
     batchStart += batch.length;
-    // Cached text ranks candidates; filtering and returned evidence use fresh canonical text.
     const reads = await Promise.allSettled(batch.map(candidate => readRawNote(config, candidate.path)));
     for (let i = 0; i < batch.length; i++) {
-      const candidate = batch[i];
-      if (reads[i].status === 'rejected') throw reads[i].reason;
+      if (reads[i].status === 'rejected') {
+        if (missing(reads[i].reason)) continue;
+        throw reads[i].reason;
+      }
       const {content, ...rawNote} = reads[i].value;
       const note = applyReview(rawNote, reviews);
-      const text = content.toLowerCase();
-      const hit = words.find(word => text.includes(word) || note.title.toLowerCase().includes(word));
-      if (!hit || !eligible(note)) continue;
+      const terms = new Set(lexicalTerms(`${note.title} ${note.path} ${content}`));
+      if (!words.some(word => terms.has(word)) || !eligible(note)) continue;
       if (total >= start && items.length < maximum) {
-        let passage = content;
-        if (all) {
-          passage = passage.replace(/^---\r?\n[\s\S]*?\r?\n---(?:\r?\n|$)/, '').trimStart();
-          const heading = passage.match(/^#\s+([^\r\n]+)\r?\n/);
-          if (heading?.[1].trim() === note.title.trim()) passage = passage.slice(heading[0].length).trimStart();
-          passage = passage.replace(/^#{1,6}[ \t]+/gm, '');
-        }
-        const index = passageMatch(passage, words)?.index ?? 0;
-        items.push({...note, excerpt: passage.slice(Math.max(0, index - 80), index + 420), score: candidate.score});
+        items.push({...note, ...passageEvidence(content, note.title, note.path, words), score: batch[i].score});
       }
       total++;
     }
@@ -279,7 +261,7 @@ export async function policies(config, cwd = process.cwd(), query = '', usage = 
       const note = await readNote(config, item.path);
       const match = passageMatch(note.content, queryWords(query));
       if (!match) continue;
-      const hit = match.index, matchEnd = hit + match[0].length;
+      const hit = match.index, matchEnd = match.end;
       let start = Math.max(0, hit - 80), end = Math.min(note.content.length, Math.max(matchEnd, hit + 420));
       const makeReference = () => `REFERENCE ${note.path} · ${note.owner} · ${note.status} · revision ${note.revision}\n${note.content.slice(start, end)}${start || end < note.content.length ? '\n[Excerpt; read the source for full context.]' : ''}`;
       let reference = makeReference();
@@ -422,15 +404,19 @@ export async function saveReviewFromEditor(config, relative, expectedRevision, d
   });
 }
 
-async function prepareMarkdown(config, relative, content, expectedRevision) {
+async function prepareMarkdown(config, relative, content, expectedRevision, {normalize = true} = {}) {
   if (typeof relative !== 'string' || !/\.md$/i.test(relative)) throw new Error('Only Markdown note paths can be saved.');
   if (typeof content !== 'string') throw new Error('Content must be Markdown text no larger than 2 MiB.');
-  content = crlf(content);
+  if (normalize) content = crlf(content);
   if (Buffer.byteLength(content) > 2 * 1024 * 1024) throw new Error('Content must be Markdown text no larger than 2 MiB.');
   if (expectedRevision !== 'new' && !/^[a-f0-9]{64}$/.test(expectedRevision || '')) throw new Error('Supply expected revision, or new when creating a note.');
   const full = await safePath(config.vault, relative, true);
   let current;
-  try { current = await fs.readFile(full, 'utf8'); } catch (error) { if (!missing(error)) throw error; }
+  try {
+    const note = await readRawNote(config, relative);
+    current = note.content;
+    relative = note.path;
+  } catch (error) { if (!missing(error)) throw error; }
   if ((current === undefined ? 'new' : hash(current)) !== expectedRevision) {
     const error = new Error('Revision conflict: this note changed on disk. Your draft must be reconciled before saving.');
     error.status = 409;
@@ -443,7 +429,7 @@ async function prepareMarkdown(config, relative, content, expectedRevision) {
 
 async function commitMarkdown(config, {relative, content, full, current}) {
   if (current !== undefined) {
-    const history = path.join(config.backupDir, 'history', hash(relative), `${Date.now()}-${randomUUID()}.md`);
+    const history = path.join(config.backupDir, 'history', hash(relative), `${Date.now()}-${randomUUID()}-${hash(current)}.md`);
     await fs.mkdir(path.dirname(history), {recursive: true});
     await fs.writeFile(history, current, {flag: 'wx'});
   }
@@ -565,10 +551,12 @@ async function main() {
     case 'search': result=await search(config,flags.query || '',{cwd:flags.cwd,limit:flags.limit === undefined ? 12 : Number(flags.limit),usage:{source:'cli'}}); break;
     case 'read': result=await readNote(config,flags.path,{source:'cli'}); break;
     case 'write': { let input=''; for await (const chunk of process.stdin) {input+=chunk; if(Buffer.byteLength(input)>2*1024*1024) throw new Error('Input exceeds 2 MiB.');} result=await writeNote(config,flags.path,input,flags.expected,flags['workspace-icon']); break; }
+    case 'knowledge': { const {getNoteKnowledge} = await import('./knowledge.mjs'); result = await getNoteKnowledge(config, flags.path); break; }
+    case 'capture': { let content = ''; for await (const chunk of process.stdin) { content += chunk; if (Buffer.byteLength(content) > 2 * 1024 * 1024) throw new Error('Input exceeds 2 MiB.'); } const {getCaptureSuggestions} = await import('./knowledge.mjs'); result = await getCaptureSuggestions(config, {cwd: flags.cwd, path: flags.path, content}); break; }
     case 'workspace-icons': result=await searchWorkspaceIcons(config,flags.query || '',flags.limit === undefined ? 24 : Number(flags.limit)); break;
     case 'backup': result=await backup(config); break;
     case 'restore': if(!flags.snapshot || !flags.target) throw new Error('restore requires --snapshot and --target.'); result=await restore(config,flags.snapshot,flags.target); break;
-    default: throw new Error('Commands: policy, catalog, search, read, write, workspace-icons, backup, restore.');
+    default: throw new Error('Commands: policy, catalog, search, read, write, knowledge, capture, workspace-icons, backup, restore.');
   }
   console.log(JSON.stringify(result,null,2));
 }

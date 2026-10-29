@@ -2,6 +2,7 @@ import type { ExtensionAPI } from '@oh-my-pi/pi-coding-agent';
 import { loadConfig, policies, search, readNote, writeNote, isProtectedPath } from '../src/memory.mjs';
 import { searchWorkspaceIcons } from '../src/workspace-icons.mjs';
 import { observeHarness } from '../src/harness-status.mjs';
+import { getCaptureSuggestions, getNoteKnowledge } from '../src/knowledge.mjs';
 
 // The installed extension API supplies its own TypeBox-compatible builder.
 export default function (pi: ExtensionAPI) {
@@ -32,6 +33,22 @@ export default function (pi: ExtensionAPI) {
     parameters: Type.Object({ query: Type.String(), limit: Type.Optional(Type.Number()) }),
     async execute(_id, args) {
       try { return text(await searchWorkspaceIcons(await loadConfig(), args.query, args.limit)); } catch (error) { return failure(error); }
+    },
+  });
+  pi.registerTool({
+    name: 'shared_memory_capture', label: 'Check related memory before capture', approval: 'read',
+    description: 'Find scoped existing notes before saving a durable finding. Suggestions are lexical overlap, not proven duplicates or contradictions; update or link the original where appropriate.',
+    parameters: Type.Object({ path: Type.String(), content: Type.String(), limit: Type.Optional(Type.Number()) }),
+    async execute(_id, args, _signal, _update, ctx) {
+      try { return text(await getCaptureSuggestions(await loadConfig(), { cwd: ctx.cwd, ...args })); } catch (error) { return failure(error); }
+    },
+  });
+  pi.registerTool({
+    name: 'shared_memory_knowledge', label: 'Inspect memory relationships', approval: 'read',
+    description: 'Inspect explicit replacements, conflicts and possible overlaps for a note without changing its authority or review state.',
+    parameters: Type.Object({ path: Type.String() }),
+    async execute(_id, args) {
+      try { return text(await getNoteKnowledge(await loadConfig(), args.path)); } catch (error) { return failure(error); }
     },
   });
   pi.registerTool({

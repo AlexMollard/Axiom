@@ -59,7 +59,7 @@ export async function inventoryUsage(config, notes, options = {}) {
 }
 // Receipts describe delivery, not comprehension; revision belongs to the delivered bytes.
 export async function recordUsage(config, notes, kind, source, options = {}) {
-  if (!['read', 'excerpt', 'context'].includes(kind) || !['cli', 'omp', 'claude'].includes(source)) throw new Error('Invalid usage receipt.');
+  if (!['read', 'excerpt', 'context'].includes(kind) || !['cli', 'omp', 'claude', 'mcp'].includes(source)) throw new Error('Invalid usage receipt.');
   if (!notes.length) return {healthy: true, reason: null};
   let db;
   try {

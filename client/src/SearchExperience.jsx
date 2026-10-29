@@ -6,7 +6,7 @@ const label = (id, groups) => groups.find(group => group.id === id)?.name || (id
 const scope = (note, groups) => note.project === 'global' || groups.some(group => group.id === note.project) ? note.project : '__unmapped';
 
 function Highlight({ text = '', query }) {
-  const words = [...new Set((query.toLowerCase().match(/[\p{L}\p{N}_-]{3,}/gu) || []))].sort ( (a, b) => b.length - a.length);
+  const words = [...new Set((query.toLowerCase().match(/[\p{L}\p{N}][\p{L}\p{N}+#]*/gu) || []))].filter(word => !['the','and','for','this','that','with','from','have','please','what','how','can','you'].includes(word)).sort((a, b) => b.length - a.length);
   if (!words.length) return text;
   const pattern = new RegExp('(' + words.map(word => word.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('|') + ')', 'giu');
   return text.split(pattern).map((part, index) => index % 2 ? <mark key={index}>{part}</mark> : part);
@@ -43,7 +43,7 @@ export function SearchResults({ query, groups, filters, onFiltersChange }) {
     </div>
     <p className="search-scope">{searchScope === 'active' ? 'Active knowledge excludes proposals, handovers, archived and superseded notes.' : 'All notes includes proposals, handovers, archived and superseded notes.'}</p>
     <p className="search-count" role="status" aria-live="polite" aria-atomic="true">{error ? `Search failed: ${error}` : !result ? 'Searching…' : `${result.total} ${result.total === 1 ? 'result' : 'results'}`}</p>
-    <div aria-busy={!result && !error}>{result && <>{!result.total && <p>No matching notes.</p>}{sections.map(([id, notes]) => <section className="search-section" key={id}><h2>{label(id, groups)}</h2>{notes.map(note => <a className="search-result" href={noteUrl(note.path)} key={note.path}><strong><Highlight text={note.title} query={query} /></strong><small>{note.path} · {note.owner === 'owner' ? 'Owner' : note.reviewStatus === 'reviewed' ? 'Reviewed' : 'Unreviewed'}</small><div className="search-result-badges">{note.path.startsWith('Agents/Proposals/') && <span className="badge">Proposal</span>}{note.path.startsWith('Agents/Handovers/') && <span className="badge">Handover</span>}{['archived', 'superseded'].includes((note.status || '').toLowerCase()) && <span className="badge">{note.status}</span>}</div><span><Highlight text={note.excerpt} query={query} /></span></a>)}</section>)}<div className="search-pages"><button type="button" disabled={!offset} onClick={() => setOffset(Math.max(0, offset - 50))}>Previous</button><button type="button" disabled={!result.hasMore} onClick={() => setOffset(offset + 50)}>Next</button></div></>}</div>
+    <div aria-busy={!result && !error}>{result && <>{!result.total && <p>No matching notes.</p>}{sections.map(([id, notes]) => <section className="search-section" key={id}><h2>{label(id, groups)}</h2>{notes.map(note => <a className="search-result" href={noteUrl(note.path) + (note.anchor ? '#' + encodeURIComponent(note.anchor) : '')} key={note.path}><strong><Highlight text={note.title} query={query} /></strong><small>{note.path} · {note.owner === 'owner' ? 'Owner' : note.reviewStatus === 'reviewed' ? 'Reviewed' : 'Unreviewed'}</small>{(note.heading || note.line || note.matchReason) && <small>{[note.heading, note.line ? `Line ${note.line}` : '', note.matchReason].filter(Boolean).join(' · ')}</small>}<div className="search-result-badges">{note.path.startsWith('Agents/Proposals/') && <span className="badge">Proposal</span>}{note.path.startsWith('Agents/Handovers/') && <span className="badge">Handover</span>}{['archived', 'superseded'].includes((note.status || '').toLowerCase()) && <span className="badge">{note.status}</span>}</div><span><Highlight text={note.excerpt} query={query} /></span></a>)}</section>)}<div className="search-pages"><button type="button" disabled={!offset} onClick={() => setOffset(Math.max(0, offset - 50))}>Previous</button><button type="button" disabled={!result.hasMore} onClick={() => setOffset(offset + 50)}>Next</button></div></>}</div>
   </section>;
 }
 
@@ -53,9 +53,19 @@ const actions = [
   { title: 'Recovery', url: '/?view=recovery' }, { title: 'Usage', url: '/?view=usage' },
   { title: 'Workspaces', url: '/?view=projects' }, { title: 'Trash', url: '/?view=trash' },
 ];
-export function CommandPalette({ open, onClose, onNavigate, groups, notes }) {
+export function CommandPalette({ open, onClose, onNavigate, groups, notes, vaultId, recent }) {
   const [query, setQuery] = useState(''), [selected, setSelected] = useState(0);
   const input = useRef(null), previous = useRef(null), dialog = useRef(null);
+  const [storedRecent, setStoredRecent] = useState({ vaultId: null, paths: [], error: '' });
+  useEffect(() => {
+    if (!open || !vaultId) return;
+    try {
+      const value = JSON.parse(localStorage.getItem('axiom-recent-notes:' + vaultId) || '[]');
+      setStoredRecent({ vaultId, paths: Array.isArray(value) ? value.filter(path => typeof path === 'string').slice(0, 20) : [], error: '' });
+    } catch {
+      setStoredRecent({ vaultId, paths: [], error: 'Recent notes are unavailable on this device.' });
+    }
+  }, [open, vaultId, recent]);
   useEffect(() => {
     if (!open) return;
     previous.current = document.activeElement; setQuery(''); setSelected(0); input.current?.focus();
@@ -65,12 +75,16 @@ export function CommandPalette({ open, onClose, onNavigate, groups, notes }) {
     const terms = query.trim().toLowerCase().split(/\s+/).filter(Boolean);
     const matches = value => terms.every(term => value.toLowerCase().includes(term));
     const workspaces = [...groups].sort((a,b) => (a.group === 'home' ? 1 : 0) - (b.group === 'home' ? 1 : 0) || a.name.localeCompare(b.name));
+    const recentState = recent?.vaultId === vaultId && recent.error ? recent : storedRecent;
+    const byPath = new Map(notes.map(note => [note.path, note]));
+    const recentEntries = !terms.length && recentState.vaultId === vaultId ? recentState.paths.map(path => byPath.get(path)).filter(Boolean).map(item => ({title: item.title, detail: item.path, kind: 'Recent', url: noteUrl(item.path)})) : [];
     return [
+      ...recentEntries,
       ...actions.filter(item => matches(item.title)).map(item => ({...item, kind: 'Action'})),
       ...workspaces.filter(item => matches(item.name)).map(item => ({title: item.name, kind: 'Workspace', url: '/?project=' + encodeURIComponent(item.id)})),
       ...notes.filter(item => matches(item.title + ' ' + item.path)).slice(0, 50).map(item => ({title: item.title, detail: item.path, kind: 'Note', url: noteUrl(item.path)})),
     ];
-  }, [query, groups, notes]);
+  }, [query, groups, notes, vaultId, recent, storedRecent]);
   useEffect(() => { setSelected(0); }, [query]);
   useEffect(() => { if (open) dialog.current?.querySelector(`#palette-option-${selected}`)?.scrollIntoView({block: 'nearest'}); }, [open, selected]);
   if (!open) return null;
@@ -82,5 +96,5 @@ export function CommandPalette({ open, onClose, onNavigate, groups, notes }) {
     else if (event.key === 'Enter') { event.preventDefault(); choose(entries[selected]); }
     else if (event.key === 'Tab') { event.preventDefault(); input.current?.focus(); }
   };
-  return <div className="palette-backdrop" onMouseDown={event => { if (event.target === event.currentTarget) onClose(); }}><div ref={dialog} className="command-palette" role="dialog" aria-modal="true" aria-label="Command palette" onKeyDown={keyDown}><input ref={input} role="combobox" aria-label="Search commands, workspaces and notes" aria-expanded="true" aria-controls="palette-results" aria-activedescendant={entries[selected] ? 'palette-option-' + selected : undefined} value={query} onChange={event => setQuery(event.target.value)} placeholder="Search notes, workspaces, and actions" /><div id="palette-results" role="listbox" className="palette-results">{entries.map((item, index) => <div role="option" aria-selected={selected === index} id={'palette-option-' + index} key={item.kind + item.url} className={'palette-option' + (index === selected ? ' selected' : '')} onMouseMove={() => setSelected(index)} onClick={() => choose(item)}><span><strong>{item.title}</strong>{item.detail && <small>{item.detail}</small>}</span><small>{item.kind}</small></div>)}{!entries.length && <p>No matches.</p>}</div><small className="palette-hint">↑ ↓ to select · Enter to open · Esc to close</small></div></div>;
+  return <div className="palette-backdrop" onMouseDown={event => { if (event.target === event.currentTarget) onClose(); }}><div ref={dialog} className="command-palette" role="dialog" aria-modal="true" aria-label="Command palette" onKeyDown={keyDown}><input ref={input} role="combobox" aria-label="Search commands, workspaces and notes" aria-expanded="true" aria-controls="palette-results" aria-activedescendant={entries[selected] ? 'palette-option-' + selected : undefined} value={query} onChange={event => setQuery(event.target.value)} placeholder="Search notes, workspaces, and actions" />{(recent?.vaultId === vaultId && recent.error || storedRecent.vaultId === vaultId && storedRecent.error) && <p role="status">{recent?.error || storedRecent.error}</p>}<div id="palette-results" role="listbox" className="palette-results">{entries.map((item, index) => <React.Fragment key={item.kind + item.url}>{item.kind === 'Recent' && (index === 0 || entries[index - 1].kind !== 'Recent') && <div className="palette-group-label">Recent</div>}<div role="option" aria-selected={selected === index} id={'palette-option-' + index} className={'palette-option' + (index === selected ? ' selected' : '')} onMouseMove={() => setSelected(index)} onClick={() => choose(item)}><span><strong>{item.title}</strong>{item.detail && <small>{item.detail}</small>}</span><small>{item.kind}</small></div></React.Fragment>)}{!entries.length && <p>No matches.</p>}</div><small className="palette-hint">↑ ↓ to select · Enter to open · Esc to close</small></div></div>;
 }

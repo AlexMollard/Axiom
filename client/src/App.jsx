@@ -4,13 +4,14 @@ import WorkspaceIcon from './WorkspaceIcon.jsx';
 import { DeleteNote, WorkspaceSettings, Trash } from './Management.jsx';
 import {SearchResults, CommandPalette} from './SearchExperience.jsx';
 import {ReviewInbox, ReviewDiff} from './ReviewInbox.jsx';
-import {WorkspaceOverview, MemoryHealth} from './KnowledgeViews.jsx';
+import {WorkspaceOverview, MemoryHealth, NoteKnowledge} from './KnowledgeViews.jsx';
 import HarnessPage from './HarnessPage.jsx';
 import RecoveryPage from './RecoveryPage.jsx';
 import Notifications from './Notifications.jsx';
 import UsagePage, { UsageSummary } from './UsageViews.jsx';
 
 const MarkdownEditor = lazy(() => import('./MarkdownEditor.jsx'));
+const NoteHistory = lazy(() => import('./NoteHistory.jsx'));
 const WorkspaceGraph = lazy(() => import('./WorkspaceGraph.jsx'));
 const labels = { all: 'All notes', owner: 'Your notes', agent: 'Agent memory', review: 'Review queue', proposals: 'Review queue', projects: 'Workspaces', trash: 'Trash', health: 'Memory health', harnesses: 'Harnesses', recovery: 'Backups & recovery', usage: 'Note usage' };
 const projectLabel = (id, groups = []) => groups.find(g => g.id === id)?.name || (id === '__unmapped' ? 'Unmapped notes' : id === 'global' ? 'General' : (id || 'General').replaceAll('-', ' ').replace(/^./, c => c.toUpperCase()));
@@ -77,7 +78,7 @@ function Panel({ title, action, children, className = '' }) {
   return <section className={'panel ' + className}><div className="panel-heading"><h2>{title}</h2>{action}</div>{children}</section>;
 }
 function Empty({ children }) { return <p className="empty">{children}</p>; }
-function Reader({ data, notes, vaultName, groups, onReview, reviewBusy, reviewError, onNext, onDelete, reviewScope }) {
+function Reader({ data, notes, vaultName, groups, onReview, reviewBusy, reviewError, onNext, onDelete, reviewScope, onOpenNote, onRestored }) {
   const { note, html } = data;
   const parsed = useMemo(() => {
     const doc = new DOMParser().parseFromString(html, 'text/html');
@@ -98,6 +99,8 @@ function Reader({ data, notes, vaultName, groups, onReview, reviewBusy, reviewEr
     {note.owner === 'agent' && note.reviewKind === 'changed' && <ReviewDiff path={note.path} revision={note.revision} />}
     <div className="reader-grid"><article id="axiom-current-note" tabIndex="-1" className="panel reader markdown">{note.owner === 'agent' && note.reviewKind === 'changed' && <p><a href="#axiom-review-comparison">Jump to comparison</a></p>}<div dangerouslySetInnerHTML={{ __html: parsed.html }} /></article><aside className="reader-side"><UsageSummary path={note.path} /><nav className="panel toc" aria-label="On this page"><h2>On this page</h2>{parsed.headings.length ? parsed.headings.map(h => <a key={h.id} className={'toc-' + h.level.toLowerCase()} href={'#' + encodeURIComponent(h.id)}>{h.title}</a>) : <span className="muted">No section headings</span>}</nav><details className="panel source-details"><summary>Source &amp; revision</summary><p>Canonical Markdown file</p><code>{note.path}</code><p>Revision</p><code>{note.revision}</code></details></aside></div>
     <Panel title="Linked from" className="backlinks">{backlinks.length ? backlinks.slice(0, 8).map(n => <NoteRow key={n.path} note={n} />) : <Empty>No incoming links yet.</Empty>}</Panel>
+    <NoteKnowledge note={note} onOpenNote={onOpenNote} />
+    <Suspense fallback={<p className="muted">Loading note history...</p>}><NoteHistory note={note} onRestored={onRestored} /></Suspense>
   </>;
 }
 export default function App() {
@@ -107,9 +110,10 @@ export default function App() {
   const [reviewBusy, setReviewBusy] = useState(false); const [reviewError, setReviewError] = useState('');
   const [management, setManagement] = useState(null);
   const [paletteOpen, setPaletteOpen] = useState(false);
+  const [recent, setRecent] = useState({ vaultId: null, paths: [], error: '' });
   const [collapsed, setCollapsed] = useState(() => { try { const value = JSON.parse(localStorage.getItem('axiom-workspace-folders') || '{}'); return value && typeof value === 'object' && !Array.isArray(value) ? value : {}; } catch { return {}; } });
   const input = useRef(null); const timer = useRef(null); const request = useRef(0);
-  const guard = useCallback(() => !dirty.current || window.confirm('Discard your unsaved changes?'), []);
+  const guard = useCallback(() => !dirty.current || window.confirm('Leave this editor without saving? Your draft is retained only in this browser when local storage is available.'), []);
   const navigate = useCallback((next, mode = 'push', bypass = false) => {
     clearTimeout(timer.current);
     const sameEditor = next.kind === 'note' && routeRef.current.kind === 'note' && next.path === routeRef.current.path && next.edit && routeRef.current.edit;
@@ -146,6 +150,17 @@ export default function App() {
         if (route.kind === 'note') result = await api('/api/note?path=' + encodeURIComponent(route.path));
         else if (route.kind === 'overview' && cat.notes.some(n => n.path === 'Home.md')) result = await api('/api/note?path=Home.md');
         if (id !== request.current) return; setData(result); setLoading(false);
+        if (route.kind === 'note' && !route.edit && result?.note?.path === route.path && cat.vaultId) {
+          const key = 'axiom-recent-notes:' + cat.vaultId;
+          try {
+            const stored = JSON.parse(localStorage.getItem(key) || '[]');
+            const paths = [route.path, ...(Array.isArray(stored) ? stored.filter(path => typeof path === 'string' && path !== route.path) : [])].slice(0, 20);
+            localStorage.setItem(key, JSON.stringify(paths));
+            setRecent({ vaultId: cat.vaultId, paths, error: '' });
+          } catch {
+            setRecent(previous => ({ vaultId: cat.vaultId, paths: [route.path, ...(previous.vaultId === cat.vaultId ? previous.paths.filter(path => path !== route.path) : [])].slice(0, 20), error: 'Recent notes could not be saved on this device.' }));
+          }
+        }
       } catch (e) { if (id === request.current) { setError(e.message || 'Unable to read the vault.'); setLoading(false); } }
     })();
     return () => { request.current++; };
@@ -221,8 +236,8 @@ export default function App() {
   let content;
   if (loading) content = <div className="boot">Reading your vault…</div>;
   else if (error && !data && route.kind !== 'new') content = <><h1>Could not load this view</h1><p className="muted">Your source files have not been changed.</p><button className="button" onClick={refreshView}>Try again</button></>;
-  else if (route.kind === 'new' || (route.kind === 'note' && route.edit && data)) content = <Suspense fallback={<div className="boot">Opening editor…</div>}><MarkdownEditor key={route.kind === 'new' ? '__new' : route.path} initialNote={route.kind === 'new' ? null : data.note} vaultName={vault} onSaved={save} onDirtyChange={value => { dirty.current = value; }} onCancel={() => navigate(route.kind === 'new' ? { kind: 'overview' } : { ...route, edit: false })} /></Suspense>;
-  else if (route.kind === 'note' && data) content = <Reader data={data} notes={notes} vaultName={vault} groups={groups} reviewScope={reviewScope} onReview={review} reviewBusy={reviewBusy} reviewError={reviewError} onNext={() => nextReview()} onDelete={() => setManagement('note')} />;
+  else if (route.kind === 'new' || (route.kind === 'note' && route.edit && data)) content = <Suspense fallback={<div className="boot">Opening editor...</div>}><MarkdownEditor key={JSON.stringify([catalog?.vaultId, route.kind === 'new' ? null : route.path])} initialNote={route.kind === 'new' ? null : data.note} vaultName={vault} vaultId={catalog?.vaultId} onSaved={save} onDirtyChange={value => { dirty.current = value; }} onCancel={() => navigate(route.kind === 'new' ? { kind: 'overview' } : { ...route, edit: false })} /></Suspense>;
+  else if (route.kind === 'note' && data) content = <Reader key={JSON.stringify([catalog?.vaultId, data.note.path])} data={data} notes={notes} vaultName={vault} groups={groups} reviewScope={reviewScope} onReview={review} reviewBusy={reviewBusy} reviewError={reviewError} onNext={() => nextReview()} onDelete={() => setManagement('note')} onOpenNote={path => navigate({kind: 'note', path})} onRestored={({note, html}) => { setCatalog(c => c ? { ...c, notes: c.notes.map(n => n.path === note.path ? note : n) } : c); if (routeRef.current.kind === 'note' && !routeRef.current.edit && routeRef.current.path === note.path) setData({note, html}); }} />;
   else if (route.kind === 'overview') content = <Overview notes={notes} groups={groups} data={data} activity={activity} setActivity={setActivity} />;
   else if (route.kind === 'trash') content = <Trash onRestored={() => api('/api/catalog').then(setCatalog).catch(e => setError(e.message))} />;
   else if (route.kind === 'search') content = <><PageHeading title="Search results" description={`Matches for “${route.query}” in ${route.scope === 'active' ? 'active knowledge' : 'all notes'}.`} /><SearchResults query={route.query} groups={groups} filters={{workspace: route.workspace || '', owner: route.owner || '', review: route.review || '', scope: route.scope || 'all'}} onFiltersChange={filters => navigate({...route, ...filters})} /></>;
@@ -260,7 +275,7 @@ export default function App() {
       <div className="page-content"><div role="status" aria-live="polite">{error && <div className="error-notice">{error}</div>}</div><div aria-busy={loading}>{content}</div></div>
       {management === 'note' && data?.note && <DeleteNote note={data.note} onClose={() => setManagement(null)} onDeleted={() => { setManagement(null); navigate({ kind: 'all' }); setRefresh(n => n + 1); }} />}
       {management === 'workspace' && <WorkspaceSettings key={route.id} id={route.id} onClose={() => setManagement(null)} onChanged={() => { setManagement(null); setRefresh(n => n + 1); }} onDeleted={() => { setManagement(null); navigate({ kind: 'projects' }); setRefresh(n => n + 1); }} />}
-      <CommandPalette open={paletteOpen} onClose={() => setPaletteOpen(false)} onNavigate={url => navigate(routeFrom(new URL(url, location.href)))} groups={groups} notes={notes} />
+      <CommandPalette open={paletteOpen} onClose={() => setPaletteOpen(false)} onNavigate={url => navigate(routeFrom(new URL(url, location.href)))} groups={groups} notes={notes} vaultId={catalog?.vaultId} recent={recent} />
     </main>
   </div>;
 }

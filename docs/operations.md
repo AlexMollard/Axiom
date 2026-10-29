@@ -44,6 +44,8 @@ Native hooks and policy instructions are rule-level safeguards, not operating-sy
 
 Keep the configuration, vault, backups and operational state outside the application Git checkout. `.gitignore` is a precaution, not a substitute for private locations and reviewing staged files before sharing. The application repository should not contain vault contents, usage data, private captures or machine configuration.
 
+Local draft copies contain note text in this browser profile, isolated by vault ID and path. Treat the browser profile as private too. Draft recovery is not a backup, is not synchronized to Obsidian or another browser, and may fail when storage is disabled, full or cleared. Recent-note navigation stores paths, not usage evidence.
+
 ## Backups and restore
 
 Axiom creates a local vault snapshot at server startup and every 24 hours while running. You can also create one with `axiom-memory backup` or in the browser recovery interface. Snapshots contain vault files and workspace settings; the usage database and other operational state are not part of the vault snapshot. Plan separately for state you need to preserve.
@@ -55,5 +57,11 @@ axiom-memory restore --snapshot "C:/private/axiom/backups/snapshots/SNAPSHOT-ID"
 ```
 
 The restore verifies snapshot checksums and writes the vault to the new target, never over the live vault. It returns captured workspace settings rather than applying them to the live configuration; review them when recovering. Snapshots are local only, not off-machine disaster recovery. Arrange independent off-machine copies and periodically verify a restore. Manage retention manually.
+
+### Per-note history
+
+The reader's Revision history uses the existing pre-write archives under `backupDir/history`, rather than a second canonical store. Restore requires the current revision, preserves its bytes first, and rejects the review ledger and workspace icon registry. It does not approve notes, but restoring the exact bytes of a previously approved revision can restore that revision's existing review status. External edits may never have entered this history.
+
+New archive filenames include their content checksum; legacy entries remain readable and visibly unverified. Checksums detect mismatched bytes, not factual correctness or a malicious same-user filesystem rewrite. Existing note paths are canonicalized before new archives are created. Older archives created using an alternate Windows path spelling can be accessed by requesting that original spelling through the history API; unknown old spellings cannot be reconstructed from hashed directory names. Existing archives are retained, never guessed or reassigned.
 
 On Windows, write-lock recovery reclaims a lock only when its valid recorded PID is positively confirmed dead. A kernel guard serializes new acquirers and complete owner metadata is published atomically. Live, inaccessible and malformed owners fail closed; the file-lock protocol remains compatible with already-running harness processes. Non-Windows stale locks require deliberate manual handling. Never manually remove or replace locks while writers are active; these safeguards do not protect against arbitrary same-user filesystem changes.

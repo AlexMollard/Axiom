@@ -14,10 +14,12 @@ import { buildWorkspaceGraph } from './workspace-graph.mjs';
 import { readWorkspaceIcons, searchWorkspaceIcons } from './workspace-icons.mjs';
 import { workspaceDetail, updateWorkspace, deleteNote, deleteWorkspace, listTrash, restoreTrash, protectedDeletionReason } from './management.mjs';
 import {getReviewDiff} from './review-history.mjs';
-import {getWorkspaceOverview, getMemoryHealth} from './knowledge.mjs';
+import {getWorkspaceOverview, getMemoryHealth, getNoteKnowledge, getCaptureSuggestions} from './knowledge.mjs';
 import {getHarnessStatus} from './harness-status.mjs';
 import {getRecoveryStatus, createRecoverySnapshot, checkRecoverySnapshot} from './recovery.mjs';
 import {inventoryUsage, getNoteUsage} from './note-usage.mjs';
+import {getNoteHistory, getNoteHistoryRevision, restoreNoteHistoryFromEditor} from './note-history.mjs';
+import {headingSlug, resolveNote} from './note-links.mjs';
 
 const buildDir = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'dist');
 const assetTypes = { '.js': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8', '.woff2': 'font/woff2', '.txt': 'text/plain; charset=utf-8' };
@@ -28,7 +30,6 @@ const headers = {
   'Content-Security-Policy': "default-src 'none'; script-src 'self'; style-src 'self'; font-src 'self'; img-src 'self' data:; connect-src 'self'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'",
 };
 
-const headingSlug = text => text.toLowerCase().replace(/[^\p{L}\p{N}]+/gu, '-').replace(/^-|-$/g, '') || 'section';
 function noteHref(note, target, wiki = false) {
   const fragment = target.includes('#') ? target.slice(target.indexOf('#') + 1) : '';
   let decoded = fragment;
@@ -36,39 +37,6 @@ function noteHref(note, target, wiki = false) {
   return '/?note=' + encodeURIComponent(note.path) + (fragment ? '#' + encodeURIComponent(wiki ? headingSlug(decoded) : decoded) : '');
 }
 
-const noteIndexes = new WeakMap();
-function noteIndex(notes) {
-  let index = noteIndexes.get(notes);
-  if (index) return index;
-  index = { paths: new Map(), aliases: new Map() };
-  const add = (map, key, note) => map.set(key, map.has(key) ? null : note);
-  for (const note of notes) {
-    const fullPath = note.path.replace(/\.md$/i, '').toLowerCase();
-    const basename = note.path.split('/').pop().replace(/\.md$/i, '').toLowerCase();
-    const title = note.title.toLowerCase();
-    add(index.paths, fullPath, note);
-    add(index.aliases, basename, note);
-    if (title !== basename) add(index.aliases, title, note);
-  }
-  noteIndexes.set(notes, index);
-  return index;
-}
-
-function resolveNote(target, current, notes) {
-  const clean = target.split('#')[0].split('?')[0].replace(/\\/g, '/');
-  let decoded;
-  try { decoded = decodeURIComponent(clean); } catch { return null; }
-  if (!decoded || /^[a-z][a-z\d+.-]*:/i.test(decoded) || decoded.startsWith('//')) return null;
-  const withoutExt = decoded.replace(/\.md$/i, '');
-  const relative = path.posix.normalize(path.posix.join(path.posix.dirname(current), withoutExt)).replace(/^\.\//, '');
-  const root = path.posix.normalize(withoutExt.replace(/^\//, ''));
-  const index = noteIndex(notes);
-  const match = index.paths.get((decoded.startsWith('/') ? root : relative).toLowerCase());
-  if (match) return match;
-  const rootMatch = index.paths.get(root.toLowerCase());
-  if (rootMatch) return rootMatch;
-  return index.aliases.get(root.toLowerCase()) || null;
-}
 
 export function renderMarkdown(content, current, notes, graph = null) {
   const md = new MarkdownIt({ html: false, linkify: false, breaks: false });
@@ -172,12 +140,23 @@ export function createServer(config, configId = null) {
       const review = req.method === 'PUT' && url.pathname === '/api/note-review';
       const management = (req.method === 'PUT' && url.pathname === '/api/workspace') || (req.method === 'DELETE' && ['/api/note', '/api/workspace'].includes(url.pathname)) || (req.method === 'POST' && url.pathname === '/api/trash/restore');
       const recovery = req.method === 'POST' && ['/api/recovery/backup', '/api/recovery/check'].includes(url.pathname);
-      if (!read && !save && !preview && !review && !management && !recovery) { res.setHeader('Allow', 'GET, HEAD, PUT, POST, DELETE'); return json(405, { error: 'Method not allowed' }); }
-      if (save || preview || review || management || recovery) {
+      const historyRestore = req.method === 'POST' && url.pathname === '/api/note-history/restore';
+      const capturePreview = req.method === 'POST' && url.pathname === '/api/capture-suggestions';
+      if (!read && !save && !preview && !review && !management && !recovery && !historyRestore && !capturePreview) { res.setHeader('Allow', 'GET, HEAD, PUT, POST, DELETE'); return json(405, { error: 'Method not allowed' }); }
+      if (save || preview || review || management || recovery || historyRestore || capturePreview) {
         if (req.headers.origin !== `http://${host.toLowerCase()}` || req.headers['sec-fetch-site'] === 'cross-site') return json(403, { error: 'Editor requests must originate from this site.' });
         const token = req.headers['x-shared-brain-csrf'];
         if (typeof token !== 'string' || !/^[a-f0-9]{64}$/.test(token) || !timingSafeEqual(Buffer.from(token, 'hex'), csrf)) return json(403, { error: 'Editor session is missing or expired. Reload the editor session; your draft has not been saved.' });
         const body = await readJson(req);
+        if (capturePreview) {
+          if (typeof body.path !== 'string' || typeof body.content !== 'string' || Buffer.byteLength(body.content) > 2 * 1024 * 1024) return json(400, {error: 'Provide a Markdown path and content no larger than 2 MiB.'});
+          const workspace = body.workspace ?? /^Agents\/Memory\/Projects\/([^/]+)\//.exec(body.path)?.[1] ?? 'global';
+          return json(200, await getCaptureSuggestions(config, {workspace, path: body.path, content: body.content, limit: 5}));
+        }
+        if (historyRestore) {
+          const note = await restoreNoteHistoryFromEditor(config, body.path, body.id, body.expectedRevision);
+          return json(200, {note, html: renderMarkdown(note.content, note.path, await catalog(config))});
+        }
         if (recovery) return json(200, url.pathname === '/api/recovery/backup' ? await createRecoverySnapshot(config) : await checkRecoverySnapshot(config, body.snapshot));
         if (management) {
           if (url.pathname === '/api/trash/restore') return json(200, await restoreTrash(config, body.id));
@@ -226,6 +205,9 @@ export function createServer(config, configId = null) {
       if (url.pathname === '/api/trash') return json(200, await listTrash(config));
       if (url.pathname === '/api/graph') return json(200, await buildWorkspaceGraph(config, url.searchParams.get('project'), renderMarkdown));
       if (url.pathname === '/api/review-diff') return json(200, await getReviewDiff(config, url.searchParams.get('path')));
+      if (url.pathname === '/api/note-history') return json(200, await getNoteHistory(config, url.searchParams.get('path'), {offset: Number(url.searchParams.get('offset') ?? 0), limit: Number(url.searchParams.get('limit') ?? 30)}));
+      if (url.pathname === '/api/note-history-revision') return json(200, await getNoteHistoryRevision(config, url.searchParams.get('path'), url.searchParams.get('id')));
+      if (url.pathname === '/api/note-knowledge') return json(200, await getNoteKnowledge(config, url.searchParams.get('path')));
       if (url.pathname === '/api/workspace-overview') return json(200, await getWorkspaceOverview(config, url.searchParams.get('id')));
       if (url.pathname === '/api/memory-health') return json(200, await getMemoryHealth(config, renderMarkdown));
       if (url.pathname === '/api/harnesses') return json(200, await getHarnessStatus(config));

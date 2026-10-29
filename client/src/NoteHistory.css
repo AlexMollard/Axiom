@@ -1,0 +1,18 @@
+.note-history { margin: 18px 0; border: 1px solid var(--border); border-radius: 9px; color: var(--fg-secondary); background: var(--surface); }
+.note-history button { padding: 8px 12px; border: 1px solid var(--border); border-radius: 7px; background: var(--surface-raised); color: var(--fg); font: inherit; font-size: .8rem; cursor: pointer; }
+.note-history button:hover, .note-history button[aria-pressed='true'] { border-color: var(--accent-border); background: var(--accent-hover); }
+.note-history button:disabled { opacity: .55; cursor: not-allowed; }
+.note-history button:focus-visible, .note-history summary:focus-visible { outline: 2px solid var(--accent-bright); outline-offset: 2px; }
+.note-history .history-toggle { width: 100%; border: 0; text-align: left; font-weight: 700; }
+.history-body { padding: 14px; font-size: .8rem; line-height: 1.5; }
+.history-body p { margin: 0 0 12px; }
+.history-list { display: flex; flex-wrap: wrap; gap: 8px; margin: 0 0 12px; padding: 0; list-style: none; }
+.history-list span { color: var(--muted); }
+.history-error { color: var(--error); }
+.history-preview { margin-top: 18px; min-width: 0; }
+.history-preview h3 { color: var(--fg); }
+.history-diff, .history-source { max-height: 360px; overflow: auto; padding: 12px; border: 1px solid var(--border); border-radius: 7px; background: var(--surface-inset); font-size: .75rem; white-space: pre-wrap; overflow-wrap: anywhere; }
+.history-diff span { display: block; }
+.history-added { color: var(--accent-bright); }
+.history-removed { color: var(--error); }
+.history-preview details { margin-bottom: 12px; }

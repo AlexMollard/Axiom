@@ -1,0 +1,56 @@
+// Fictional corpus and relevance judgments for retrieval comparisons.
+const topics = [
+  ['api', 'API deployment', 'API gateway listens on port 42.', 'API'],
+  ['db', 'DB recovery', 'DB snapshots restore the database.', 'DB'],
+  ['ai', 'AI inference', 'AI inference runs locally.', 'AI'],
+  ['tls', 'TLS certificates', 'Renew the TLS certificate before expiry.', 'TLS'],
+  ['dns', 'DNS resolution', 'DNS resolution uses the internal resolver.', 'DNS'],
+  ['gpu', 'GPU scheduling', 'GPU scheduling reserves memory for inference.', 'GPU'],
+  ['oauth', 'OAuth login', 'OAuth login uses a nonce.', 'OAuth'],
+  ['queue', 'Queue backlog', 'Queue consumers process delayed messages.', 'backlog'],
+  ['cache', 'Cache invalidation', 'Cache entries expire after revision changes.', 'invalidation'],
+  ['backup', 'Backup restore', 'Backup restore checks the manifest.', 'manifest'],
+  ['latency', 'Latency tracing', 'Latency traces show request duration.', 'tracing'],
+  ['search', 'Search ranking', 'Search ranking weights titles.', 'ranking'],
+  ['policy', 'Policy approval', 'Policy approval requires human review.', 'approval'],
+  ['editor', 'Editor drafts', 'Editor drafts survive browser reload.', 'drafts'],
+  ['history', 'History revisions', 'History revisions preserve prior content.', 'revisions'],
+  ['network', 'Network retry', 'Network retry uses bounded attempts.', 'retry'],
+  ['socket', 'WebSocket transport', 'WebSocket transport reconnects after interruption.', 'WebSocket'],
+  ['schema', 'Schema migration', 'Schema migration preserves existing records.', 'migration'],
+  ['unicode', 'Café notes', 'Résumé of the café meeting.', 'café'],
+  ['heading', 'Release notes', '## Rollout window\nThe launch occurs on Tuesday.', 'rollout'],
+  ['compiler', 'Compiler options', 'C++ compiler flags include warnings.', 'C++'],
+  ['sharp', 'Language runtime', 'C# runtime handles managed code.', 'C#'],
+  ['incident', 'Incident response', 'The incident runbook assigns an owner.', 'incident'],
+  ['metrics', 'Metrics collection', 'Metrics use a sampling interval.', 'sampling'],
+  ['storage', 'Storage limits', 'Storage limits cap file size.', 'storage'],
+  ['render', 'Render pipeline', 'Render pipeline processes scene meshes.', 'pipeline'],
+  ['router', 'Router settings', 'Router settings select the workspace.', 'router'],
+  ['mobile', 'Mobile layout', 'Mobile layout adapts to narrow screens.', 'layout'],
+  ['testing', 'Test fixtures', 'Test fixtures contain fictional data.', 'fixtures'],
+  ['audit', 'Audit evidence', 'Audit evidence links original sources.', 'evidence']
+];
+export const corpus = [
+  ...topics.map(([id, title, body]) => ({path: `Owner/${id}.md`, title, project: 'work', body})),
+  {path: 'Owner/global.md', title: 'Garden calendar', project: 'global', body: 'Water plants on Tuesday.'},
+  {path: 'Owner/home.md', title: 'Private API credentials', project: 'home', body: 'API credentials and DNS settings for home.'},
+  {path: 'Agents/stale.md', title: 'Old API deployment', project: 'work', status: 'stale', body: 'API gateway uses port 9000.'},
+  {path: 'Agents/retired.md', title: 'Retired DB guide', project: 'work', status: 'retired', body: 'DB snapshots are obsolete.'},
+  {path: 'Agents/conflict.md', title: 'API disagreement', project: 'work', conflicts_with: 'Owner/api.md', body: 'The API port is disputed; verify before use.'},
+  ...Array.from({length: 80}, (_, i) => ({path: `Owner/noise-${i}.md`, title: `Meeting ${i}`, project: 'work', body: `Routine fictional meeting ${i}; discuss plans, schedule, team and notes.`}))
+];
+export const queries = [
+  ...topics.map(([id, , , query]) => ({query, relevant: [`Owner/${id}.md`]})),
+  {query: 'garden', relevant: ['Owner/global.md']},
+  {query: 'neverexistingquartz', relevant: []},
+  {query: 'API port', relevant: ['Owner/api.md', 'Agents/conflict.md']},
+  {query: 'why are requests taking too long', relevant: ['Owner/latency.md'], category: 'paraphrase'},
+  {query: 'jobs are piling up waiting to be processed', relevant: ['Owner/queue.md'], category: 'paraphrase'},
+  {query: 'keep what I typed if the tab closes', relevant: ['Owner/editor.md'], category: 'paraphrase'},
+  {query: 'go back to an earlier version of a document', relevant: ['Owner/history.md'], category: 'paraphrase'},
+  {query: 'check who signed off this change', relevant: ['Owner/policy.md'], category: 'paraphrase'},
+  {query: 'the address lookup is failing', relevant: ['Owner/dns.md'], category: 'paraphrase'},
+  {query: 'verify the encrypted connection identity', relevant: ['Owner/tls.md'], category: 'paraphrase'},
+  {query: 'make repeated failed connections eventually stop', relevant: ['Owner/network.md'], category: 'paraphrase'}
+];

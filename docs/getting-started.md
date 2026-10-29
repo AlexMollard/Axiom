@@ -51,6 +51,29 @@ node scripts/install.mjs --previous-root "C:/absolute/old/app"
 
 Restart Claude Code and omp in fresh sessions so the integrations load. See [agent memory](agent-memory.md#integrations-and-the-cli) for supported harnesses, existing memory-store settings, ownership and usage workflows.
 
+### Other MCP clients
+
+The official-SDK stdio server exposes policy, search, read, guarded agent writes, unused icons and capture suggestions. It does not expose human editing, review, deletion, administration or history restore. Configure it in the client's MCP settings; the exact configuration wrapper depends on the client:
+
+```json
+{
+  "mcpServers": {
+    "axiom": {
+      "command": "node",
+      "args": [
+        "C:/apps/Axiom/integrations/mcp.mjs",
+        "--config", "C:/private/axiom/config.json",
+        "--cwd", "C:/work/sample"
+      ]
+    }
+  }
+}
+```
+
+Use your actual checkout, private configuration and project directory. Keep the host session's project and MCP `--cwd` aligned. Without `--cwd`, the server uses its launch working directory; some hosts do not launch it in the project root. `SHARED_BRAIN_CONFIG` is also supported. After linking the package, `axiom-memory-mcp` is the equivalent executable.
+
+Each stdio client starts a process; Axiom does not add a permanently running MCP daemon. Enable only the integrations you use. The native installer does not register MCP servers or edit other clients' settings. MCP makes tools available, not mandatory; retain native policy hooks where configured and validate a fresh session before disabling another memory system.
+
 ## Start the application
 
 ```powershell

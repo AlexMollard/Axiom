@@ -43,6 +43,32 @@ A durable finding, with its source and relevant revision or date.
 
 To update a note, read it first and supply the returned revision as `--expected` instead of `new`. If the revision has changed, read again and resolve the conflict rather than overwriting another change. Direct file writes bypass conflict detection and recovery history. The CLI also provides `backup` and `restore`; see [operations](operations.md) for recovery.
 
+### Capture and relationship inspection
+
+Before saving a finding, pipe the proposed Markdown to the capture preflight. It returns existing scoped notes, current revisions and shared-term reasons; it does not write or merge:
+
+```powershell
+@'
+# Deployment finding
+Verify the deployment procedure before release.
+'@ | axiom-memory capture --cwd "C:/work/sample" --path "Agents/Memory/Projects/sample/deployment.md"
+axiom-memory knowledge --path "Agents/Memory/Projects/sample/deployment.md"
+```
+
+The omp equivalents are `shared_memory_capture` and `shared_memory_knowledge`. MCP exposes `capture_suggestions`; writes still require `expectedRevision` and remain Agents-only. Similarity is a candidate signal, not a verified duplicate or contradiction. Inspect the source, update the original with CAS or link it; propose corrections to owner notes under `Agents/Proposals/`.
+
+In the browser, **Inspect knowledge** follows explicit `supersedes` and `conflicts_with` references and shows possible overlaps. Dates are file last-updated times, not proof of when a fact became true. Unresolved references and directed cycles remain warnings. No replacement, merge or human approval is applied automatically.
+
+## Search, drafts and note history
+
+Search uses local SQLite FTS5/BM25, with weighted title, path and content matches. It supports short terms such as `UI` and distinguishes `C++` from `C#`. Results include a heading, source line, passage and match reason; opening one focuses its section. Required owner policies are loaded separately rather than depending on search ranking. Search remains lexical, not a promise of semantic understanding.
+
+The command palette shows up to 20 recently opened notes for this vault on this browser. These are navigation preferences, not agent-usage receipts. Missing notes are omitted.
+
+The editor debounces local draft storage and flushes on navigation or page exit where possible. On return, explicitly recover or discard the draft. Drafts are isolated by vault and note, capped at 1 MiB of serialized data each, and include the original baseline; browser quotas or a crash before persistence can still prevent recovery. Cancel leaves a locally retained draft. Save changes the canonical file only when requested. If disk content changed, recovery blocks saving and offers comparison, copy and deliberate reload instead of overwriting it.
+
+**Revision history** lists the versions archived before Axiom saves. Preview the difference and explicitly restore a selected version; the current content is archived first and a stale current revision is rejected. External-editor changes may not have been archived. New archives carry a content checksum; older archives are visibly unverified. Human review is separate: restoring exactly previously approved bytes may regain that revision's existing approval, but restore never edits the review ledger. Control ledgers cannot be restored through this interface.
+
 ## Usage is delivery, not understanding
 
-Usage records supported deliveries by note path: CLI, omp and Claude reads, excerpts and context. A receipt says what was delivered, not whether an agent understood or used it, nor that a model is currently connected. It does not cover arbitrary direct file reads or every possible integration path. Missing or quiet history is not evidence that a note is safe to delete, and Axiom does not automatically delete notes.
+Usage records supported deliveries by note path: CLI, MCP, omp and Claude reads, excerpts and context. A receipt says what was delivered, not whether an agent understood or used it, nor that a model is currently connected. CLI and MCP caller identities are not independently verified. It does not cover arbitrary direct file reads or every possible integration path. Missing or quiet history is not evidence that a note is safe to delete, and Axiom does not automatically delete notes.
