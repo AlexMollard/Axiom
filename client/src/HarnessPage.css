@@ -1,0 +1,12 @@
+.harness-page { color: var(--fg); }
+.harness-page header { max-width: 72rem; margin-bottom: 1.5rem; }
+.harness-page header p, .harness-card p, .harness-card small { color: var(--muted); }
+.harness-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 25rem), 1fr)); gap: 1rem; }
+.harness-card { background: var(--surface); border: 1px solid var(--border); border-radius: 12px; padding: 1.25rem; min-width: 0; }
+.harness-card h2 { margin: 0 0 1rem; }
+.harness-card dl { margin: 0; }
+.harness-card dl > div { border-top: 1px solid var(--border); padding: 1rem 0; }
+.harness-card dt { color: var(--accent); font-weight: 700; margin-bottom: .5rem; }
+.harness-card dd { margin: 0; overflow-wrap: anywhere; }
+.harness-card p { margin: .45rem 0; }
+.harness-card ul { padding-left: 1.25rem; }

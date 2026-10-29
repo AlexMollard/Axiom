@@ -1,0 +1,6 @@
+{
+  "vault": "C:/AxiomData/vault",
+  "backupDir": "C:/AxiomData/backups",
+  "port": 4317,
+  "projects": []
+}

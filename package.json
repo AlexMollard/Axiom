@@ -1,0 +1,39 @@
+{
+  "name": "axiom",
+  "version": "1.0.0",
+  "description": "Local Markdown memory workspace for people and coding agents",
+  "repository": { "type": "git", "url": "git+https://github.com/AlexMollard/Axiom.git" },
+  "private": true,
+  "type": "module",
+  "bin": { "axiom-memory": "./memory.mjs" },
+  "scripts": {
+    "start": "node server.mjs",
+    "dev": "vite build --watch",
+    "build": "vite build",
+    "test": "node --test memory.test.mjs graph.test.mjs workspace-icons.test.mjs review.test.mjs management.test.mjs search-experience.test.mjs knowledge.test.mjs harness-status.test.mjs recovery.test.mjs notifications.test.mjs usage.test.mjs audit-core.test.mjs audit-integrations.test.mjs",
+    "backup": "node memory.mjs backup"
+  },
+  "dependencies": {
+    "@codemirror/lang-markdown": "6.5.2",
+    "@codemirror/language": "6.13.1",
+    "@codemirror/view": "6.43.15",
+    "@fontsource-variable/jetbrains-mono": "5.3.0",
+    "@fontsource-variable/manrope": "5.3.0",
+    "@lezer/highlight": "1.2.5",
+    "@uiw/react-codemirror": "4.25.12",
+    "d3-force": "3.0.0",
+    "diff": "8.0.4",
+    "lucide-react": "1.62.0",
+    "markdown-it": "14.3.3",
+    "react": "19.3.1",
+    "react-dom": "19.3.1",
+    "sanitize-html": "2.18.1"
+  },
+  "devDependencies": {
+    "@vitejs/plugin-react": "6.1.2",
+    "vite": "8.3.5"
+  },
+  "engines": {
+    "node": ">=22.13"
+  }
+}
