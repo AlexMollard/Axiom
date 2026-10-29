@@ -6,7 +6,7 @@ Run, protect and recover an Axiom installation on Windows.
 
 ## Windows startup and supervision
 
-`./start.ps1 -Register -Open` registers two least-privilege scheduled tasks for the signed-in interactive user: a sign-in task and a short-lived health task every three minutes. They require neither administrator rights nor a stored password and do not wake the PC. The sign-in task runs a hidden one-shot launcher that starts hidden Node and exits. Node is the only persistent application process; there is no persistent PowerShell supervisor.
+`./scripts/start.ps1 -Register -Open` registers two least-privilege scheduled tasks for the signed-in interactive user: a sign-in task and a short-lived health task every three minutes. They require neither administrator rights nor a stored password and do not wake the PC. The sign-in task runs a hidden one-shot launcher that starts hidden Node and exits. Node is the only persistent application process; there is no persistent PowerShell supervisor.
 
 The launch task has no execution-time limit, ignores overlapping starts and requests three one-minute retries for task or action launch failures. Do not rely on those native retries to restart an exited process: native qualification did not restart either a killed process or an ordinary nonzero exit. The health task performs process recovery explicitly.
 
@@ -17,14 +17,20 @@ Task identity, account, actions and relevant settings are verified before manage
 A completed one-shot launch task normally shows **Ready** even while Node is healthy. Inspect `/health` at the launcher's reported URL rather than treating the launch task's Running or Ready state as the backend status.
 
 ```powershell
-./start.ps1 -Restart
-./start.ps1 -ConfigPath "C:/private/axiom/config.json" -Register
-./start.ps1 -Unregister
+./scripts/start.ps1 -Restart
+./scripts/start.ps1 -ConfigPath "C:/private/axiom/config.json" -Register
+./scripts/start.ps1 -Unregister
 ```
 
 Use the same selected configuration when managing its tasks. `-Unregister` removes the verified automatic-start and health tasks but does not terminate an already-running backend. Registration removes the default installation's matching old `Axiom` Run-key entry only after both tasks are verified. When migrating from an older launcher, stop the verified old process before starting the managed runtime. Never run an archived installation against a separate copy of current usage state.
 
 The integration installer saves an installation report and rollback copies under the configured backup directory's `installation` folder. Use those copies to restore the previous Claude settings and omp wrapper if rolling back, taking care not to overwrite unrelated changes made since installation. When moving the application, use the installer's `--previous-root` option as described in [getting started](getting-started.md#optional-agent-integrations).
+
+### Upgrading from the earlier flat layout
+
+Before replacing an old checkout, use its `./start.ps1 -Unregister` to retire the verified old task actions, then stop only its verified backend: match the `/health` PID to the Node executable, old server path and selected configuration. Unregistering alone does not stop Node. After updating, relink the CLI with `npm link --ignore-scripts` and register `./scripts/start.ps1 -Register -Open`. The command name stays `axiom-memory`, but its target is now `src/memory.mjs`.
+
+If npm reports `EEXIST` for an old CLI shim, inspect and back up that shim and verify that the linked package targets this checkout before removing the obsolete owned shim and relinking. Do not force-overwrite an unrelated command. Restart existing harness sessions to replace cached modules. Native hook and extension paths remain under `integrations/`; private configuration, vault and state do not move.
 
 ## Private state and logs
 

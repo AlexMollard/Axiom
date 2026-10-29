@@ -3,10 +3,10 @@ import assert from 'node:assert/strict';
 import * as fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
-import {loadConfig, readNote, saveFromEditor} from './memory.mjs';
-import {readWorkspaceIcons} from './workspace-icons.mjs';
-import {workspaceDetail, updateWorkspace, deleteNote, deleteWorkspace, listTrash, restoreTrash} from './management.mjs';
-import {createServer} from './server.mjs';
+import {loadConfig, readNote, saveFromEditor} from '../src/memory.mjs';
+import {readWorkspaceIcons} from '../src/workspace-icons.mjs';
+import {workspaceDetail, updateWorkspace, deleteNote, deleteWorkspace, listTrash, restoreTrash} from '../src/management.mjs';
+import {createServer} from '../src/server.mjs';
 
 async function fixture(t) {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'axiom-management-'));

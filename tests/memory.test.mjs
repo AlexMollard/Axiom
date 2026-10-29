@@ -7,9 +7,9 @@ import {get as httpGet} from 'node:http';
 import {spawn, spawnSync} from 'node:child_process';
 import {once} from 'node:events';
 import {fileURLToPath} from 'node:url';
-import {loadConfig, catalog, readNote, writeNote, search, policies, backup, restore, isProtectedPath, locked, hash} from './memory.mjs';
-import {createServer} from './server.mjs';
-import {serializeWorkspaceIcons} from './workspace-icons.mjs';
+import {loadConfig, catalog, readNote, writeNote, search, policies, backup, restore, isProtectedPath, locked, hash} from '../src/memory.mjs';
+import {createServer} from '../src/server.mjs';
+import {serializeWorkspaceIcons} from '../src/workspace-icons.mjs';
 
 async function fixture(t) {
   const root = await fs.mkdtemp(path.join(os.tmpdir(),'shared-brain-test-'));
@@ -163,7 +163,7 @@ test('Windows recovers a killed lock owner while protecting live and malformed l
   const {config}=await fixture(t);
   const lockPath=path.join(os.tmpdir(),`shared-brain-${hash(config.vault).slice(0,20)}.lock`);
   t.after(()=>fs.rm(lockPath,{force:true}));
-  const moduleUrl=new URL('./memory.mjs',import.meta.url).href;
+  const moduleUrl=new URL('../src/memory.mjs',import.meta.url).href;
   const script=`import {locked} from ${JSON.stringify(moduleUrl)}; const config=JSON.parse(process.env.TEST_LOCK_CONFIG); await locked(config,async()=>{ console.log('ready'); await new Promise(()=>setInterval(()=>{},1000)); });`;
   async function owner() {
     const child=spawn(process.execPath,['--input-type=module','-e',script],{env:{...process.env,TEST_LOCK_CONFIG:JSON.stringify(config)},stdio:['ignore','pipe','pipe']});
@@ -263,8 +263,8 @@ test('linked CLI executes from an unrelated working directory', async t => {
   const original = await writeNote(config, 'Agents/Memory/Projects/alpha/linked.md', '# Linked CLI\r\nCanonical linked-entry evidence.\r\n', 'new');
   const configPath = path.join(root, 'config.json'), linked = path.join(root, 'linked-app');
   await fs.writeFile(configPath, JSON.stringify(config));
-  await fs.symlink(path.dirname(fileURLToPath(import.meta.url)), linked, process.platform === 'win32' ? 'junction' : 'dir');
-  const result = spawnSync(process.execPath, [path.join(linked, 'memory.mjs'), 'read', '--path', original.path], {cwd: root, env: {...process.env, SHARED_BRAIN_CONFIG: configPath}, encoding: 'utf8'});
+  await fs.symlink(path.dirname(path.dirname(fileURLToPath(import.meta.url))), linked, process.platform === 'win32' ? 'junction' : 'dir');
+  const result = spawnSync(process.execPath, [path.join(linked, 'src', 'memory.mjs'), 'read', '--path', original.path], {cwd: root, env: {...process.env, SHARED_BRAIN_CONFIG: configPath}, encoding: 'utf8'});
   assert.equal(result.status, 0, result.stderr);
   const delivered = JSON.parse(result.stdout);
   assert.equal(delivered.path, original.path);

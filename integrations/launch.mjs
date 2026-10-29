@@ -1,7 +1,7 @@
 import { spawn } from 'node:child_process';
 import { access } from 'node:fs/promises';
 import { delimiter, join } from 'node:path';
-import { loadConfig, policies } from '../memory.mjs';
+import { loadConfig, policies } from '../src/memory.mjs';
 
 const [program, ...args] = process.argv.slice(2);
 if (program !== 'claude' && program !== 'omp') {

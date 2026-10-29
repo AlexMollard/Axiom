@@ -8,7 +8,7 @@ import {spawn} from 'node:child_process';
 import {fileURLToPath} from 'node:url';
 import {createHash} from 'node:crypto';
 
-const serverPath = fileURLToPath(new URL('./server.mjs', import.meta.url));
+const serverPath = fileURLToPath(new URL('../src/server.mjs', import.meta.url));
 const processesByConfig = new Map();
 async function freePort() {
   const server = net.createServer();

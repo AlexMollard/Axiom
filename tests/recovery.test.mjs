@@ -3,10 +3,10 @@ import assert from 'node:assert/strict';
 import * as fs from 'node:fs/promises';
 import path from 'node:path';
 import os from 'node:os';
-import {loadConfig, saveFromEditor, readNote} from './memory.mjs';
-import {getRecoveryStatus, createRecoverySnapshot, checkRecoverySnapshot} from './recovery.mjs';
-import {workspaceDetail, updateWorkspace, deleteWorkspace, restoreTrash} from './management.mjs';
-import {createServer} from './server.mjs';
+import {loadConfig, saveFromEditor, readNote} from '../src/memory.mjs';
+import {getRecoveryStatus, createRecoverySnapshot, checkRecoverySnapshot} from '../src/recovery.mjs';
+import {workspaceDetail, updateWorkspace, deleteWorkspace, restoreTrash} from '../src/management.mjs';
+import {createServer} from '../src/server.mjs';
 
 async function fixture(t) {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'axiom-recovery-'));

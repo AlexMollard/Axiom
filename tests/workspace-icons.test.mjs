@@ -3,8 +3,8 @@ import assert from 'node:assert/strict';
 import * as fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
-import {writeNote, readNote, saveFromEditor, backup, restore} from './memory.mjs';
-import {WORKSPACE_ICONS_PATH, readWorkspaceIcons, searchWorkspaceIcons, serializeWorkspaceIcons} from './workspace-icons.mjs';
+import {writeNote, readNote, saveFromEditor, backup, restore} from '../src/memory.mjs';
+import {WORKSPACE_ICONS_PATH, readWorkspaceIcons, searchWorkspaceIcons, serializeWorkspaceIcons} from '../src/workspace-icons.mjs';
 
 async function fixture(t) {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'workspace-icons-'));

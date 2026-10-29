@@ -4,8 +4,8 @@ import * as fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { createHash } from 'node:crypto';
-import { search } from './memory.mjs';
-import { serializeReviewLedger } from './note-reviews.mjs';
+import { search } from '../src/memory.mjs';
+import { serializeReviewLedger } from '../src/note-reviews.mjs';
 
 async function fixture(t) {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'axiom-search-'));

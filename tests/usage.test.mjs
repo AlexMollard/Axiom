@@ -4,8 +4,8 @@ import * as fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import {spawn} from 'node:child_process';
-import {inventoryUsage, recordUsage, getNoteUsage} from './note-usage.mjs';
-import {catalog, readNote, search, policies} from './memory.mjs';
+import {inventoryUsage, recordUsage, getNoteUsage} from '../src/note-usage.mjs';
+import {catalog, readNote, search, policies} from '../src/memory.mjs';
 
 const day = 86400000, start = Date.parse('2025-01-01T12:00:00Z');
 const at = days => ({now: start + days * day});
@@ -105,7 +105,7 @@ test('only explicit delivery records retrieval and policy references', async t =
 test('simultaneous subprocess receipts are not lost', async t => {
   const {config} = await fixture(t), n = note('concurrent');
   await inventoryUsage(config, [n]);
-  const moduleUrl = new URL('./note-usage.mjs', import.meta.url).href;
+  const moduleUrl = new URL('../src/note-usage.mjs', import.meta.url).href;
   const program = `import {recordUsage} from ${JSON.stringify(moduleUrl)}; const [config,note]=JSON.parse(process.argv[1]); for(let i=0;i<10;i++) {const result=await recordUsage(config,[note],'read','cli'); if(!result.healthy) process.exit(1);}`;
   await Promise.all(Array.from({length: 4}, () => new Promise((resolve, reject) => {
     const child = spawn(process.execPath, ['--input-type=module', '-e', program, JSON.stringify([config, n])], {stdio:'ignore'});

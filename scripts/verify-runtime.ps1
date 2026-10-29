@@ -2,9 +2,9 @@
 [CmdletBinding()]
 param([string]$EvidenceDir)
 $ErrorActionPreference = 'Stop'
-$repo = $PSScriptRoot
-$launcher = Join-Path $repo 'start.ps1'
-$server = Join-Path $repo 'server.mjs'
+$repo = Split-Path -Parent $PSScriptRoot
+$launcher = Join-Path $PSScriptRoot 'start.ps1'
+$server = Join-Path $repo 'src/server.mjs'
 $node = (Get-Command node -ErrorAction Stop).Source
 $pwsh = (Get-Command pwsh -ErrorAction Stop).Source
 if (-not $EvidenceDir) {

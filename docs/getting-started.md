@@ -40,13 +40,13 @@ Create the vault and its `Owner` directory. A human must write both `Owner/Polic
 For browser-only use, skip the installer. To install the native Claude Code hooks and omp extension wrapper, after creating the two owner files run:
 
 ```powershell
-node install.mjs
+node scripts/install.mjs
 ```
 
 The installer preserves unrelated settings and saves rollback copies and an installation report in private backup storage. It does not install dependencies, link the CLI or edit global instruction files. When relocating an existing installation, supply the absolute old application root so matching old Axiom handlers can be replaced:
 
 ```powershell
-node install.mjs --previous-root "C:/absolute/old/app"
+node scripts/install.mjs --previous-root "C:/absolute/old/app"
 ```
 
 Restart Claude Code and omp in fresh sessions so the integrations load. See [agent memory](agent-memory.md#integrations-and-the-cli) for supported harnesses, existing memory-store settings, ownership and usage workflows.
@@ -54,7 +54,7 @@ Restart Claude Code and omp in fresh sessions so the integrations load. See [age
 ## Start the application
 
 ```powershell
-./start.ps1 -Register -Open
+./scripts/start.ps1 -Register -Open
 ```
 
 This starts the application, registers current-user automatic startup and opens the browser. Use the URL reported by the launcher; the configured port may differ from the example. For supervision, recovery and security details, see [operations](operations.md).

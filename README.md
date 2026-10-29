@@ -38,7 +38,7 @@ The supported setup is **Windows with Node.js 22.13+ and PowerShell 7**. Bun and
 3. **Launch from the configured checkout:**
 
    ```powershell
-   ./start.ps1 -Register -Open
+   ./scripts/start.ps1 -Register -Open
    ```
 
 Axiom opens at its configured loopback address and registers hidden, current-user sign-in startup with bounded health recovery. Use the URL printed by the launcher.

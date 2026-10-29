@@ -1,6 +1,6 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
-import {initialNotifications, parseNotifications, reconcileNotifications, unreadNotifications, acknowledgeNotifications} from './client/src/notification-state.mjs';
+import {initialNotifications, parseNotifications, reconcileNotifications, unreadNotifications, acknowledgeNotifications} from '../client/src/notification-state.mjs';
 
 const first = 'a'.repeat(64), second = 'b'.repeat(64), third = 'c'.repeat(64);
 const note = (path, revision = first, extra = {}) => ({path, revision, owner: 'agent', reviewStatus: 'unreviewed', status: 'current', updated: '2026-10-28T00:00:00.000Z', ...extra});

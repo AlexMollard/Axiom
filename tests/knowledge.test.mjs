@@ -3,8 +3,8 @@ import assert from 'node:assert/strict';
 import * as fs from 'node:fs/promises';
 import path from 'node:path';
 import os from 'node:os';
-import { getWorkspaceOverview, getMemoryHealth } from './knowledge.mjs';
-import { renderMarkdown } from './server.mjs';
+import { getWorkspaceOverview, getMemoryHealth } from '../src/knowledge.mjs';
+import { renderMarkdown } from '../src/server.mjs';
 
 async function fixture(t) {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'axiom-knowledge-'));

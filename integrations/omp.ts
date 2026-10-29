@@ -1,7 +1,7 @@
 import type { ExtensionAPI } from '@oh-my-pi/pi-coding-agent';
-import { loadConfig, policies, search, readNote, writeNote, isProtectedPath } from '../memory.mjs';
-import { searchWorkspaceIcons } from '../workspace-icons.mjs';
-import { observeHarness } from '../harness-status.mjs';
+import { loadConfig, policies, search, readNote, writeNote, isProtectedPath } from '../src/memory.mjs';
+import { searchWorkspaceIcons } from '../src/workspace-icons.mjs';
+import { observeHarness } from '../src/harness-status.mjs';
 
 // The installed extension API supplies its own TypeBox-compatible builder.
 export default function (pi: ExtensionAPI) {

@@ -3,14 +3,14 @@ import path from 'node:path';
 import os from 'node:os';
 import {randomUUID} from 'node:crypto';
 import {fileURLToPath, pathToFileURL} from 'node:url';
-import {loadConfig, policies} from './memory.mjs';
+import {loadConfig, policies} from '../src/memory.mjs';
 
-const root = path.dirname(fileURLToPath(import.meta.url));
+const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const args = process.argv.slice(2);
 let previousRoot;
 if (args.length) {
   if (args.length !== 2 || args[0] !== '--previous-root' || !path.isAbsolute(args[1])) {
-    throw new Error('Usage: node install.mjs [--previous-root <absolute old app root>]');
+    throw new Error('Usage: node scripts/install.mjs [--previous-root <absolute old app root>]');
   }
   previousRoot = path.resolve(args[1]);
 }

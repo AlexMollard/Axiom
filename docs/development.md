@@ -9,7 +9,7 @@ Build and work on the local Node and React application without exposing private 
 Follow [getting started](getting-started.md) for prerequisites, dependency installation and a private configuration. `npm start` invokes the Windows background launcher with the selected configuration; if registered, it uses the managed scheduled task. Alternatively, run Node in the foreground with the absolute path to the configuration:
 
 ```powershell
-node server.mjs "C:/private/axiom/config.json"
+node src/server.mjs "C:/private/axiom/config.json"
 ```
 
 In another terminal, `npm run dev` watches and rebuilds the browser assets. It is not a second development server: keep the backend running and reload the browser after a rebuild. The Markdown editor is lazy-loaded; the build currently reports a large-chunk warning for it.
@@ -25,17 +25,20 @@ npm run verify:runtime
 
 `verify:runtime` is an opt-in Windows integration check for startup, ownership and recovery changes. It creates a disposable vault and scheduled tasks, waits for real periodic crash recovery, checks hidden consoles and failure boundaries, and removes only its verified fixtures. Allow several minutes; evidence stays in private application state. It does not reboot or sign out the current user.
 
-## Source map
+## Repository layout
 
-| Area | Starting point |
-| --- | --- |
-| HTTP server and configuration | [server.mjs](../server.mjs) |
-| Retrieval, CLI and revision-aware writes | [memory.mjs](../memory.mjs) |
-| Native integrations | [integrations/](../integrations/) |
-| Browser application | [client/src/App.jsx](../client/src/App.jsx) |
-| Graph and worker layout | [WorkspaceGraph.jsx](../client/src/WorkspaceGraph.jsx), [graph-layout.worker.mjs](../client/src/graph-layout.worker.mjs) |
-| Review and usage | [note-reviews.mjs](../note-reviews.mjs), [note-usage.mjs](../note-usage.mjs) |
-| Windows launcher and runtime verification | [start.ps1](../start.ps1), [verify-runtime.ps1](../verify-runtime.ps1) |
+The root contains the README, package manifests, Vite configuration and example private configuration. Application code, tests and maintenance scripts have separate homes:
+
+| Directory | Responsibility | Entry points |
+| --- | --- | --- |
+| [`src/`](../src/) | Backend, retrieval, reviews, usage and recovery | [HTTP server](../src/server.mjs), [CLI and memory APIs](../src/memory.mjs) |
+| [`client/`](../client/) | React browser application and styles | [Application](../client/src/App.jsx), [graph](../client/src/WorkspaceGraph.jsx) |
+| [`integrations/`](../integrations/) | Native harness adapters and the agent contract | [Claude Code](../integrations/claude-hook.mjs), [omp](../integrations/omp.ts), [contract](../integrations/instructions.md) |
+| [`scripts/`](../scripts/) | Installation, Windows supervision and native qualification | [Installer](../scripts/install.mjs), [launcher](../scripts/start.ps1), [runtime check](../scripts/verify-runtime.ps1) |
+| [`tests/`](../tests/) | Behavioral suites and their isolated fixtures | `npm test` runs `tests/*.test.mjs` only |
+| [`docs/`](./) | User and contributor guides, plus fictional-data screenshots | [Getting started](getting-started.md) |
+
+`dist/` is generated browser output and `node_modules/` is installed tooling; neither is application source to organize or commit. Keep test discovery scoped to `tests/` so generated browser bundles are not mistaken for Node tests. There are no compatibility entry points left at the old root paths.
 
 ## Performance
 

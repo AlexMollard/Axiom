@@ -1,5 +1,5 @@
-import { loadConfig, policies, isProtectedPath } from '../memory.mjs';
-import { observeHarness } from '../harness-status.mjs';
+import { loadConfig, policies, isProtectedPath } from '../src/memory.mjs';
+import { observeHarness } from '../src/harness-status.mjs';
 
 const input = await new Promise((resolve, reject) => {
   let data = '';

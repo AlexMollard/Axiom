@@ -3,9 +3,9 @@ import assert from 'node:assert/strict';
 import * as fs from 'node:fs/promises';
 import path from 'node:path';
 import os from 'node:os';
-import {catalog, readNote, saveFromEditor, search, policies} from './memory.mjs';
-import {getNoteUsage} from './note-usage.mjs';
-import {createServer, renderMarkdown} from './server.mjs';
+import {catalog, readNote, saveFromEditor, search, policies} from '../src/memory.mjs';
+import {getNoteUsage} from '../src/note-usage.mjs';
+import {createServer, renderMarkdown} from '../src/server.mjs';
 
 async function fixture(t) {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'axiom-core-'));

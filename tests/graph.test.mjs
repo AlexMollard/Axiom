@@ -4,7 +4,7 @@ import * as fs from 'node:fs/promises';
 import path from 'node:path';
 import os from 'node:os';
 import http from 'node:http';
-import { createServer } from './server.mjs';
+import { createServer } from '../src/server.mjs';
 
 test('workspace graph follows rendered links and keeps workspace boundaries', async t => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'shared-graph-'));

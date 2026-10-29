@@ -4,7 +4,7 @@ import * as fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { observeHarness, getHarnessStatus } from './harness-status.mjs';
+import { observeHarness, getHarnessStatus } from '../src/harness-status.mjs';
 
 async function fixture(t) {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'axiom-harness-'));
@@ -70,7 +70,7 @@ test('Claude installation requires the full command and exact matcher', async t 
   const { config } = await fixture(t);
   const dir = path.join(config.harnessHome, '.claude');
   await fs.mkdir(dir, { recursive: true });
-  const target = fileURLToPath(new URL('./integrations/claude-hook.mjs', import.meta.url)).replace(/\\/g, '/');
+  const target = fileURLToPath(new URL('../integrations/claude-hook.mjs', import.meta.url)).replace(/\\/g, '/');
   const command = `"${process.execPath.replace(/\\/g, '/')}" "${target}"`;
   const handler = { type: 'command', command };
   const hooks = Object.fromEntries(['SessionStart', 'UserPromptSubmit', 'SubagentStart'].map(event => [event, [{ hooks: [handler] }]]));

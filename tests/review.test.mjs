@@ -3,10 +3,10 @@ import assert from 'node:assert/strict';
 import * as fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
-import {createServer} from './server.mjs';
-import {catalog, readNote, search, saveFromEditor, saveReviewFromEditor, writeNote, projectFor, backup, restore} from './memory.mjs';
-import {getReviewDiff, preserveReviewedRevision} from './review-history.mjs';
-import {parseReviewLedger, serializeReviewLedger, applyReview} from './note-reviews.mjs';
+import {createServer} from '../src/server.mjs';
+import {catalog, readNote, search, saveFromEditor, saveReviewFromEditor, writeNote, projectFor, backup, restore} from '../src/memory.mjs';
+import {getReviewDiff, preserveReviewedRevision} from '../src/review-history.mjs';
+import {parseReviewLedger, serializeReviewLedger, applyReview} from '../src/note-reviews.mjs';
 
 async function fixture(t) {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'brain-review-'));

@@ -4,7 +4,7 @@ import os from 'node:os';
 import { createHash, randomUUID } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 
-const root = path.dirname(fileURLToPath(import.meta.url));
+const root = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
 const events = { omp: ['input', 'before_agent_start', 'before_subagent_spawn'], claude: ['SessionStart', 'UserPromptSubmit', 'SubagentStart'] };
 const stateDirectory = config => path.join(path.dirname(config.configPath || path.join(process.env.LOCALAPPDATA || path.join(os.homedir(), '.config'), 'Axiom', 'config.json')), '.state');
 const journalDirectory = config => path.join(stateDirectory(config), `harness-observations-${createHash('sha256').update(path.resolve(config.vault)).digest('hex').slice(0, 16)}`);

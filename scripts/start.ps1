@@ -2,7 +2,7 @@
 [CmdletBinding()]
 param([switch]$Register, [switch]$Unregister, [switch]$Open, [switch]$Restart, [switch]$Health, [switch]$TaskLaunch, [string]$ConfigPath)
 $ErrorActionPreference = 'Stop'
-$root = $PSScriptRoot
+$root = Split-Path -Parent $PSScriptRoot
 if (-not $ConfigPath) {
   $ConfigPath = if ($env:SHARED_BRAIN_CONFIG) { $env:SHARED_BRAIN_CONFIG } else {
     $data = if ($env:LOCALAPPDATA) { $env:LOCALAPPDATA } else { Join-Path ([Environment]::GetFolderPath('UserProfile')) '.config' }
@@ -32,8 +32,8 @@ trap {
 }
 $taskName = "Axiom-$hash"
 $healthName = "$taskName-Health"
-$script = Join-Path $root 'start.ps1'
-$server = Join-Path $root 'server.mjs'
+$script = Join-Path $PSScriptRoot 'start.ps1'
+$server = Join-Path $root 'src/server.mjs'
 $quotedConfig = '"' + $ConfigPath + '"'
 $serverArgument = '"' + $server + '" ' + $quotedConfig
 if ($TaskLaunch) {

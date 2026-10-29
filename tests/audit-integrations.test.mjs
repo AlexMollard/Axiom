@@ -5,9 +5,9 @@ import os from 'node:os';
 import path from 'node:path';
 import {spawnSync} from 'node:child_process';
 import {fileURLToPath} from 'node:url';
-import {getHarnessStatus} from './harness-status.mjs';
+import {getHarnessStatus} from '../src/harness-status.mjs';
 
-const source = path.dirname(fileURLToPath(import.meta.url));
+const source = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
 async function fixture(t) {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'axiom-integration-'));
   t.after(() => fs.rm(root, {recursive: true, force: true}));
@@ -15,7 +15,8 @@ async function fixture(t) {
   const vault = path.join(root, 'vault'), backupDir = path.join(root, 'backups');
   await fs.mkdir(app, {recursive: true});
   await fs.symlink(path.join(source, 'node_modules'), path.join(app, 'node_modules'), process.platform === 'win32' ? 'junction' : 'dir');
-  for (const name of await fs.readdir(source)) if (name.endsWith('.mjs') && !name.endsWith('.test.mjs')) await fs.copyFile(path.join(source, name), path.join(app, name));
+  await fs.cp(path.join(source, 'src'), path.join(app, 'src'), {recursive: true});
+  await fs.cp(path.join(source, 'scripts'), path.join(app, 'scripts'), {recursive: true});
   await fs.cp(path.join(source, 'integrations'), path.join(app, 'integrations'), {recursive: true});
   await fs.mkdir(path.join(vault, 'Owner'), {recursive: true});
   await fs.writeFile(path.join(vault, 'Owner', 'Policies.md'), '# Rules\nFollow the rules.\n');
@@ -67,7 +68,7 @@ test('standalone installer preserves settings, replaces only the requested old h
   await fs.mkdir(path.dirname(settings), {recursive: true});
   await fs.writeFile(settings, JSON.stringify(existing));
   const previousRootArgument = process.platform === 'win32' ? previousRoot.toUpperCase() : previousRoot;
-  let result = run(f, 'install.mjs', ['--previous-root', previousRootArgument]);
+  let result = run(f, 'scripts/install.mjs', ['--previous-root', previousRootArgument]);
   assert.equal(result.status, 0, result.stderr);
   const merged = JSON.parse(await fs.readFile(settings, 'utf8'));
   const command = `"${process.execPath.replaceAll('\\', '/')}" "${path.join(f.app, 'integrations', 'claude-hook.mjs').replaceAll('\\', '/')}"`;
@@ -82,7 +83,7 @@ test('standalone installer preserves settings, replaces only the requested old h
   }
   assert.match(await fs.readFile(extension, 'utf8'), /integrations\/omp\.ts/);
   assert.equal(await fs.readFile(adjacent, 'utf8'), 'parent settings must not change');
-  result = run(f, 'install.mjs', ['--previous-root', previousRootArgument]);
+  result = run(f, 'scripts/install.mjs', ['--previous-root', previousRootArgument]);
   assert.equal(result.status, 0, result.stderr);
   assert.deepEqual(JSON.parse(await fs.readFile(settings, 'utf8')), merged);
   const snapshots = await fs.readdir(path.join(f.root, 'backups', 'installation'));
@@ -96,19 +97,19 @@ test('installer initializes missing settings and fails safely on malformed setti
   const f = await fixture(t);
   const settings = path.join(f.home, '.claude', 'settings.json');
   const extension = path.join(f.home, '.omp', 'agent', 'extensions', 'shared-brain.ts');
-  let result = run(f, 'install.mjs');
+  let result = run(f, 'scripts/install.mjs');
   assert.equal(result.status, 0, result.stderr);
   assert.ok(JSON.parse(await fs.readFile(settings, 'utf8')).hooks.SessionStart.length);
   await assert.rejects(fs.access(path.join(f.root, 'configs')), {code: 'ENOENT'});
   const wrapper = await fs.readFile(extension, 'utf8');
   await fs.writeFile(settings, '{broken');
-  result = run(f, 'install.mjs');
+  result = run(f, 'scripts/install.mjs');
   assert.notEqual(result.status, 0);
   assert.equal(await fs.readFile(settings, 'utf8'), '{broken');
   assert.equal(await fs.readFile(extension, 'utf8'), wrapper);
   await fs.writeFile(settings, '{}');
   await fs.rm(path.join(f.vault, 'Owner', 'Policies.md'));
-  result = run(f, 'install.mjs');
+  result = run(f, 'scripts/install.mjs');
   assert.notEqual(result.status, 0);
   assert.equal(await fs.readFile(settings, 'utf8'), '{}');
   assert.equal(await fs.readFile(extension, 'utf8'), wrapper);
@@ -122,8 +123,8 @@ test('revived requests deliver fresh policies without phantom receipts or transc
     import {pathToFileURL} from 'node:url';
     const app = ${JSON.stringify(f.app)};
     const {default: integrate} = await import(pathToFileURL(app + '/integrations/omp.ts').href);
-    const {loadConfig, catalog} = await import(pathToFileURL(app + '/memory.mjs').href);
-    const {getNoteUsage} = await import(pathToFileURL(app + '/note-usage.mjs').href);
+    const {loadConfig, catalog} = await import(pathToFileURL(app + '/src/memory.mjs').href);
+    const {getNoteUsage} = await import(pathToFileURL(app + '/src/note-usage.mjs').href);
     const handlers = new Map(), schema = () => ({});
     integrate({typebox: {Type: {Object: schema, String: schema, Number: schema, Optional: schema}}, registerTool() {}, on(name, handler) { handlers.set(name, handler); }});
     const config = await loadConfig();

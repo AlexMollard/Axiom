@@ -1,18 +1,18 @@
 {
   "name": "axiom",
-  "version": "1.1.1",
+  "version": "1.1.2",
   "description": "Local Markdown memory workspace for people and coding agents",
   "repository": { "type": "git", "url": "git+https://github.com/AlexMollard/Axiom.git" },
   "private": true,
   "type": "module",
-  "bin": { "axiom-memory": "./memory.mjs" },
+  "bin": { "axiom-memory": "./src/memory.mjs" },
   "scripts": {
-    "start": "pwsh -NoProfile -File start.ps1",
+    "start": "pwsh -NoProfile -File scripts/start.ps1",
     "dev": "vite build --watch",
     "build": "vite build",
-    "test": "node --test memory.test.mjs runtime.test.mjs graph.test.mjs workspace-icons.test.mjs review.test.mjs management.test.mjs search-experience.test.mjs knowledge.test.mjs harness-status.test.mjs recovery.test.mjs notifications.test.mjs usage.test.mjs audit-core.test.mjs audit-integrations.test.mjs",
-    "verify:runtime": "pwsh -NoProfile -File verify-runtime.ps1",
-    "backup": "node memory.mjs backup"
+    "test": "node --test \"tests/*.test.mjs\"",
+    "verify:runtime": "pwsh -NoProfile -File scripts/verify-runtime.ps1",
+    "backup": "node src/memory.mjs backup"
   },
   "dependencies": {
     "@codemirror/lang-markdown": "6.5.2",
