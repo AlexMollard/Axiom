@@ -1,89 +1,57 @@
 # Axiom
 
-Axiom is a local Markdown memory application for people and their coding agents. It provides a browser workspace for finding, editing, reviewing and managing notes, plus a CLI and native Claude Code and omp integrations. The vault remains ordinary files; Axiom is not a promise of full Obsidian compatibility.
+**Your notes. Shared context. One Markdown vault.**
 
-## Windows setup
+Axiom brings personal notes, project decisions and coding-agent memory into one place. Write and review in the browser, keep working in Obsidian, and give connected agents relevant context without handing them ownership of your notes.
 
-Install Node.js 22.13 or newer and PowerShell 7. Bun and omp are needed only for the omp integration. Open PowerShell 7 in this checkout and install the dependencies, build the browser application, and link the CLI:
+[Get started](docs/getting-started.md) · [Explore the docs](#documentation)
 
-```powershell
-npm ci --ignore-scripts
-npm run build
-npm link --ignore-scripts
-```
+![Axiom's dark dashboard showing recent notes, a human review queue, pinned references and grouped workspaces](docs/assets/overview.png)
 
-Create a private configuration outside the checkout. By default, Axiom reads `%LOCALAPPDATA%/Axiom/config.json`; if `LOCALAPPDATA` is unavailable, it uses `~/.config/Axiom/config.json`. Alternatively, set `SHARED_BRAIN_CONFIG` to the absolute path of a private JSON configuration before installing or launching. The override must also be available to any login-started process and agent session that should use it.
+*The actual application, shown with fictional demonstration notes. No personal or project data is pictured.*
 
-Copy `config.example.json` to the chosen private location and edit it. Set `vault` and `backupDir` to absolute paths outside the checkout; they must be separate directories, neither inside the other. Set `port` to a free local port. The example's paths are illustrations, not directories to use without editing. `projects` can be empty; add entries such as `{ "id": "sample", "root": "C:/work/sample" }` to map a workspace by absolute root. IDs are lowercase letters, digits and hyphens, and the longest matching root selects the workspace. Optional `additionalRoots` can map more absolute roots to the same project.
+## Built around your knowledge
 
-Create the vault and its `Owner` directory. A human must author both `Owner/Policies.md` and `Owner/Preferences.md` before installing: write the actual rules and preferences appropriate to the owner. These files are required policy inputs, not generated defaults.
+| | What you can do |
+| --- | --- |
+| **A workspace, not a file dump** | Organize projects with groups, Lucide icons and pinned notes. Open the dashboard, search the vault or jump through the command palette. |
+| **Markdown, with a proper editor** | Write with live preview in the browser, or open a note in Obsidian. The canonical notes stay ordinary files. |
+| **Connections you can explore** | Follow backlinks and workspace knowledge graphs. Pan, zoom, search and inspect a note's connections. |
+| **A review workflow for agent memory** | See new and changed findings, compare revisions, and review the exact content you checked. Later edits invalidate that approval. |
+| **Context across connected tools** | Use native Claude Code and omp integrations, plus a CLI for other explicitly configured harnesses. |
+| **Evidence, not imaginary certainty** | Inspect recorded memory deliveries, provenance and cleanup candidates. Quiet history is not proof that a note is disposable. |
 
-```powershell
-node install.mjs
-./start.ps1 -Register -Open
-```
+## You own the rules
 
-The installer configures native Claude hooks and an omp extension wrapper, preserving unrelated settings and placing rollback copies and its report in private storage. It does not install dependencies, link the CLI, or edit global instruction files. When relocating an existing Axiom installation, `node install.mjs --previous-root "C:/absolute/old/app"` allows replacement of matching old Axiom handlers; use the actual absolute old application root. Restart Claude Code and omp in fresh sessions after installation so the integrations load.
+Your notes and policies are authoritative within their scope. Agents keep their findings under `Agents/`, cite sources, and use revision-aware writes. Human review stays separate from an agent's own status labels.
 
-`start.ps1 -Register` creates two least-privilege, current-user Windows scheduled tasks: a sign-in task and a short-lived health task every three minutes. The sign-in task runs a hidden, one-shot launcher that starts hidden Node and exits; there is only one persistent application process, not an additional PowerShell supervisor. The task has no execution-time limit, ignores overlapping starts, and requests three one-minute retries for task/action-launch failures. Do not assume those settings restart a process that exits: native qualification on the development machine did not restart either a killed process or an ordinary nonzero exit. The health task explicitly performs process recovery instead. No administrator rights or stored password are required.
+This is one vault with clear responsibilities, not a second generated knowledge base to keep in sync. The browser and Obsidian work with the same Markdown; private indexes and operational state live separately.
 
-A verified stopped runtime restarts on the next health check. An unresponsive runtime, including one that has acquired its config guard but has not bound HTTP, requires two failed checks after a 60-second startup grace. At most three watchdog recoveries are allowed per incident; three healthy minutes or an explicit `-Restart` resets that budget. Persistent failures remain errors rather than an unlimited restart loop. Task identity, account, actions and relevant settings are checked before management; the live runtime is identified independently by its namespaced PID, executable and exact config argument. Foreign listeners are never stopped. Windows kernel ownership rejects duplicate launches through another configuration alias or after editing its port. The tasks do not wake the PC and use the signed-in user's interactive account.
+> Ownership is enforced through instructions and guarded APIs, not an operating-system sandbox. Local storage also does not prevent retrieved passages from reaching a cloud model. See [security and privacy](docs/operations.md#security-and-privacy).
 
-Healthy checks compare the runtime's config identity and PID with its namespaced PID file, avoiding Task Scheduler, network-provider and CIM imports on the normal path. Those heavier ownership checks remain mandatory before recovery. The serving process uses Normal priority; the brief periodic check stays at background priority. A completed one-shot launch task normally shows Ready even while Node is healthy. Inspect `/health`, not the launch task's Running/Ready state, to identify the live process.
+## Get started
 
-```powershell
-./start.ps1 -Restart
-./start.ps1 -ConfigPath "C:/private/axiom/config.json" -Register
-./start.ps1 -Unregister
-```
+The supported setup is **Windows with Node.js 22.13+ and PowerShell 7**. Bun and omp are only needed for the omp integration.
 
-`-Unregister` removes the verified automatic-start and health tasks; it does not terminate an already-running backend. Registration removes this installation's old `Axiom` Run-key entry only after both tasks are verified. When migrating from an older launcher, stop the verified old process before starting the managed runtime. Never run an archived installation against a separate copy of current usage state.
+1. **[Set up Axiom](docs/getting-started.md).** Build the checkout, choose private vault and backup locations, and write your owner policies.
+2. **[Connect your agents](docs/getting-started.md#optional-agent-integrations)** if you want native memory integration. Browser-only use does not require the integration installer.
+3. **Launch from the configured checkout:**
 
-The standalone installer leaves harness-native memory preferences unchanged. If Axiom should be the only memory store, disable competing memory only after validating a fresh integrated session. The optional agent-core installer performs that cutover after Axiom installation succeeds; without Axiom it preserves the existing memory settings.
+   ```powershell
+   ./start.ps1 -Register -Open
+   ```
 
-The index, usage database and harness observations live in `.state` beside the selected configuration, not in the checkout. Runtime PID, bounded application/health/launcher logs and recovery counters are isolated under `.state/runtime-<canonical-config-hash>/`; distinct configuration files cannot overwrite each other's runtime ownership. Each of the three logs is bounded to 1 MiB. Native warnings remain enabled and are also recorded in the bounded application log. Keep the configuration, state, vault and backups private; `.gitignore` is a precaution, not a substitute for choosing external locations and reviewing files before sharing.
+Axiom opens at its configured loopback address and registers hidden, current-user sign-in startup with bounded health recovery. Use the URL printed by the launcher.
 
-## Working with memory
+Other harnesses need explicit integration; choosing a model does not automatically connect it to your vault. Axiom is not a full replacement for Obsidian or its plugin ecosystem.
 
-Human-authored notes outside `Agents/` are authoritative. Humans manage their own notes, reviews, workspace settings and Trash in the browser; agents should treat owner content and attachments as read-only and propose corrections instead. Agents should search relevant memory, cite source paths, and write durable agent findings under `Agents/` using revision-aware tools rather than direct file writes. The optional static integration contract is in `integrations/instructions.md`.
+## Documentation
 
-The linked CLI provides `axiom-memory policy`, `catalog`, `search`, `read`, `write`, `workspace-icons`, `backup` and `restore`. For example:
+| Guide | Start here when you want to… |
+| --- | --- |
+| [Getting started](docs/getting-started.md) | Install, configure a private vault and connect supported tools. |
+| [Agent memory](docs/agent-memory.md) | Understand ownership, reviews, CLI workflows and what usage tracking really measures. |
+| [Operations](docs/operations.md) | Manage startup, diagnose the runtime, protect private data, and back up or restore a vault. |
+| [Development](docs/development.md) | Run local development, find the relevant source, verify changes and understand performance trade-offs. |
 
-```powershell
-axiom-memory search --cwd "C:/work/sample" --query "deployment"
-axiom-memory read --path "Agents/Memory/General/example.md"
-axiom-memory backup
-```
-
-Writes read Markdown from stdin and require `--path` and `--expected` (the current revision or `new`); read the note first when updating it. Restore requires `--snapshot` and `--target` and writes to a separate new directory, not the live vault. Browser management and review are human workflows, not an agent workaround for owner-note restrictions.
-
-Usage information records supported deliveries by note path, including CLI, omp and Claude integration reads, excerpts and context. It is not proof that an agent understood or used a note, and does not cover arbitrary direct file access or every possible integration path. A quiet or untracked note is not evidence that it is safe to delete. Axiom does not automatically delete notes.
-
-## Security and recovery
-
-The web server listens on loopback and uses a restrictive Content Security Policy, host/origin checks and protections for mutation requests. These reduce exposure but are not an authentication boundary against other local processes or users. Native hooks and policy instructions provide rule-level safeguards, not operating-system isolation: direct shell commands, unsupported tools or other processes can bypass them. Protect access to the machine, config, vault and backups accordingly.
-
-Axiom creates local snapshots at server startup and periodically while running; the recovery interface can check a snapshot, and the CLI can restore to a separate directory. Backups are local-only, not an off-machine disaster recovery service. Arrange independent off-machine copies and periodically verify that they can be restored. No CI workflows are installed or run automatically by this repository.
-
-On Windows, write-lock recovery reclaims a lock only when its valid recorded PID is positively confirmed dead. A kernel guard serializes new acquirers, and complete owner metadata is published atomically. Live, inaccessible and malformed owners fail closed. The existing file-lock protocol is retained for compatibility with already-running harness processes. Non-Windows stale locks still require deliberate manual handling. Do not manually remove or replace locks while writers are active; these safeguards are not protection against arbitrary same-user filesystem changes.
-
-## Development and verification
-
-```powershell
-npm test
-npm run verify:runtime
-npm run build
-npm audit
-```
-
-`verify:runtime` is an opt-in Windows integration check. It creates a disposable vault and scheduled tasks, waits for real periodic crash recovery, checks hidden consoles and failure boundaries, and removes only its verified fixtures. Allow several minutes; evidence stays in private application state. Run it after changing startup, ownership or recovery behavior. It does not reboot or sign out the current user.
-
-`npm start` invokes the Windows background launcher with the selected private configuration; if registered, it uses the managed scheduled task. For a foreground development process, use `node server.mjs "C:/absolute/private/config.json"` instead. `npm run dev` watches and rebuilds browser assets; it is not a second development server. Keep the backend running and reload the browser after a rebuild. The Markdown editor is lazy-loaded; the build currently reports a large-chunk warning for that editor.
-
-Repeated retrievals retain at most one validated derivative index when its serialized size is no greater than 32 MiB. This is a cache-eligibility bound, not a promise of 32 MiB total RAM. Every retrieval still checks source files, edits/deletions and on-disk index identity; there is no freshness TTL or idle scanning. Search evidence and required policies are read from canonical files. Content-hashed browser assets are cached immutably; HTML, note/API responses and unversioned assets remain uncached. Closing the browser stops its polling without stopping memory access.
-
-Workspace graphs run their initial force layout in a short-lived browser worker, terminated on completion or navigation. Panning and graph-search input reuse unchanged SVG geometry; zoom and fit update directly rather than replaying a full redraw animation. The graph's note list mounts only when opened and uses 48-row progressive disclosure, including search across every graph node. Large graphs still require layout CPU and render every visible SVG node/edge; this is not an unlimited graph-size or frame-rate guarantee.
-
-Markdown link resolution builds weakly retained path/alias indexes per catalogue snapshot while preserving relative/root precedence and ambiguity. Broad browser search rereads canonical candidates in bounded batches and applies ranked-order filtering/pagination afterward; native scoped retrieval still reads one candidate at a time and stops once its limit is met. Totals, evidence, policies and source-file freshness are not replaced with TTL-based answers.
-
-The application repository contains no vault, usage database, private qualification captures or machine configuration. Review the staged files before publishing changes. Keep local configuration and operational state outside the checkout even when working on the application itself.
+Built with Node.js, React and Vite. Notes remain yours; backups are local unless you arrange independent copies.

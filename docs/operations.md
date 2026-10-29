@@ -1,0 +1,53 @@
+# Operations
+
+Run, protect and recover an Axiom installation on Windows.
+
+[Back to README](../README.md)
+
+## Windows startup and supervision
+
+`./start.ps1 -Register -Open` registers two least-privilege scheduled tasks for the signed-in interactive user: a sign-in task and a short-lived health task every three minutes. They require neither administrator rights nor a stored password and do not wake the PC. The sign-in task runs a hidden one-shot launcher that starts hidden Node and exits. Node is the only persistent application process; there is no persistent PowerShell supervisor.
+
+The launch task has no execution-time limit, ignores overlapping starts and requests three one-minute retries for task or action launch failures. Do not rely on those native retries to restart an exited process: native qualification did not restart either a killed process or an ordinary nonzero exit. The health task performs process recovery explicitly.
+
+A verified stopped runtime restarts on the next health check. An unresponsive runtime, including one holding its configuration guard before binding HTTP, requires two failed checks after a 60-second startup grace. The watchdog allows at most three recoveries per incident; three healthy minutes or an explicit `-Restart` resets the budget. Persistent failure remains an error rather than an unlimited restart loop.
+
+Task identity, account, actions and relevant settings are verified before management. Runtime ownership is checked independently using the namespaced PID, executable and exact configuration argument; foreign listeners are never stopped. Windows kernel ownership rejects duplicate launches through another configuration alias or after a port edit. Healthy checks compare the `/health` response's configuration identity and PID with the namespaced PID file without importing Task Scheduler, network-provider or CIM machinery; heavier ownership checks remain mandatory before recovery. The serving process uses Normal priority, while the brief periodic check runs at background priority.
+
+A completed one-shot launch task normally shows **Ready** even while Node is healthy. Inspect `/health` at the launcher's reported URL rather than treating the launch task's Running or Ready state as the backend status.
+
+```powershell
+./start.ps1 -Restart
+./start.ps1 -ConfigPath "C:/private/axiom/config.json" -Register
+./start.ps1 -Unregister
+```
+
+Use the same selected configuration when managing its tasks. `-Unregister` removes the verified automatic-start and health tasks but does not terminate an already-running backend. Registration removes the default installation's matching old `Axiom` Run-key entry only after both tasks are verified. When migrating from an older launcher, stop the verified old process before starting the managed runtime. Never run an archived installation against a separate copy of current usage state.
+
+The integration installer saves an installation report and rollback copies under the configured backup directory's `installation` folder. Use those copies to restore the previous Claude settings and omp wrapper if rolling back, taking care not to overwrite unrelated changes made since installation. When moving the application, use the installer's `--previous-root` option as described in [getting started](getting-started.md#optional-agent-integrations).
+
+## Private state and logs
+
+The index, usage database and harness observations live in `.state` beside the selected configuration, not in the checkout. Runtime PID, recovery counters and bounded application, health and launcher logs are isolated under `.state/runtime-<canonical-config-hash>/`, so distinct configuration files cannot overwrite one another's runtime ownership. Each of the three logs is bounded to 1 MiB. Native warnings remain enabled and are also recorded in the application log. Treat this state as private alongside the configuration, vault and backups.
+
+## Security and privacy
+
+The server listens on loopback and uses a restrictive Content Security Policy, host and origin checks, and protections for mutation requests including cross-site requests. These reduce exposure, but do not authenticate other local users or processes. Protect access to the machine and private files accordingly.
+
+Native hooks and policy instructions are rule-level safeguards, not operating-system isolation. Direct shell commands, unsupported tools or other processes can bypass them. Content delivered to an agent may enter its model provider's context; local storage does not guarantee that agent context remains local. See [agent memory](agent-memory.md) for ownership boundaries and supported workflows.
+
+Keep the configuration, vault, backups and operational state outside the application Git checkout. `.gitignore` is a precaution, not a substitute for private locations and reviewing staged files before sharing. The application repository should not contain vault contents, usage data, private captures or machine configuration.
+
+## Backups and restore
+
+Axiom creates a local vault snapshot at server startup and every 24 hours while running. You can also create one with `axiom-memory backup` or in the browser recovery interface. Snapshots contain vault files and workspace settings; the usage database and other operational state are not part of the vault snapshot. Plan separately for state you need to preserve.
+
+In the recovery interface, select a snapshot and check it. To restore, use the full snapshot directory under `backupDir` and a separate, not-yet-existing target outside both the vault and backup directory:
+
+```powershell
+axiom-memory restore --snapshot "C:/private/axiom/backups/snapshots/SNAPSHOT-ID" --target "C:/private/axiom/restored-vault"
+```
+
+The restore verifies snapshot checksums and writes the vault to the new target, never over the live vault. It returns captured workspace settings rather than applying them to the live configuration; review them when recovering. Snapshots are local only, not off-machine disaster recovery. Arrange independent off-machine copies and periodically verify a restore. Manage retention manually.
+
+On Windows, write-lock recovery reclaims a lock only when its valid recorded PID is positively confirmed dead. A kernel guard serializes new acquirers and complete owner metadata is published atomically. Live, inaccessible and malformed owners fail closed; the file-lock protocol remains compatible with already-running harness processes. Non-Windows stale locks require deliberate manual handling. Never manually remove or replace locks while writers are active; these safeguards do not protect against arbitrary same-user filesystem changes.
