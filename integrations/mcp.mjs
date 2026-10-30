@@ -15,16 +15,16 @@ const text = value => typeof value === 'string'
 
 export function createMcpServer(config, {cwd = process.cwd()} = {}) {
   if (typeof cwd !== 'string' || !path.isAbsolute(cwd)) throw new Error('MCP cwd must be an absolute path.');
-  const server = new McpServer({name: 'axiom-memory', version: '1.2.0'}, {maxToolInputElements: 100});
-  const register = (name, description, inputSchema, action) => server.registerTool(name, {description, inputSchema}, async args => {
-    try { return text(await action(args)); }
+  const server = new McpServer({name: 'axiom-memory', version: '1.3.0'}, {maxToolInputElements: 100});
+  const register = (name, description, inputSchema, action) => server.registerTool(name, {description, inputSchema}, async (args, extra) => {
+    try { return text(await action(args, extra.signal)); }
     catch (error) { return {isError: true, content: [{type: 'text', text: error.message}]}; }
   });
   register('policy', 'Load owner policies and scoped context for the configured working directory.', {query: z.string().optional()}, ({query = ''}) => policies(config, cwd, query, usage));
-  register('search', 'Search scoped shared memory. Results include revision and match details.', {
+  register('search', 'Search scoped shared memory with lexical and optional local semantic retrieval. Cold model loading can take tens of seconds; semantic status reports degradation. Set mode=lexical to avoid inference.', {
     query: z.string(), limit: z.number().int().min(1).max(100).optional(), offset: z.number().int().min(0).optional(),
-    all: z.boolean().optional(), includeInactive: z.boolean().optional(), workspace: z.string().optional(), owner: z.string().optional(), review: z.string().optional()
-  }, args => search(config, args.query, {...args, cwd, usage}));
+    all: z.boolean().optional(), includeInactive: z.boolean().optional(), workspace: z.string().optional(), owner: z.string().optional(), review: z.string().optional(), mode: z.enum(['lexical', 'hybrid']).optional()
+  }, (args, signal) => search(config, args.query, {...args, cwd, usage, signal}));
   register('read', 'Read a Markdown note and its current revision.', {path: z.string()}, args => readNote(config, args.path, usage));
   register('write', 'Write an agent-owned Markdown note using its current revision or new. Owner and protected notes cannot be written.', {
     path: z.string(), content: z.string(), expectedRevision: z.string(), workspaceIcon: z.string().optional()

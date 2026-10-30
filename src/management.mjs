@@ -3,6 +3,7 @@ import path from 'node:path';
 import {randomUUID} from 'node:crypto';
 import {loadConfig, catalog, locked, safePath, readRawNote, prepareMarkdown, commitMarkdown, backupUnlocked, hash, crlf} from './memory.mjs';
 import {WORKSPACE_ICONS_PATH, readWorkspaceIcons, validateWorkspaceIcons, serializeWorkspaceIcons} from './workspace-icons.mjs';
+import {embeddingSettings} from './embeddings.mjs';
 
 const protectedPaths = new Set(['owner/policies.md', 'owner/preferences.md', 'owner/reviews.md', WORKSPACE_ICONS_PATH.toLowerCase()]);
 export const protectedDeletionReason = value => typeof value === 'string' && protectedPaths.has(value.toLowerCase()) ? 'This control note cannot be deleted.' : null;
@@ -30,6 +31,17 @@ async function saveConfig(config, raw, expectedRevision) {
     await fs.rename(temp, config.configPath);
   } finally { await fs.rm(temp, {force: true}); }
   await refresh(config);
+}
+
+export async function configureEmbeddings(config, settings, expectedRevision) {
+  embeddingSettings({embeddings: settings});
+  return locked(config, async () => {
+    const {raw, revision} = await refresh(config);
+    if (revision !== expectedRevision) throw conflict('Configuration changed during model setup; rerun setup to preserve the newer settings.');
+    raw.embeddings = settings;
+    await saveConfig(config, raw, revision);
+    return config.embeddings;
+  });
 }
 function selectNotes(config, id, notes) {
   const ids = new Set(config.projects.map(project => project.id));

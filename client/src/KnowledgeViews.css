@@ -13,3 +13,6 @@
 .knowledge-picker { border-top: 1px solid var(--border); margin-top: 1rem; padding-top: 0.5rem; }
 .knowledge-error { color: var(--error); }
 .knowledge-stale { overflow-wrap: anywhere; }
+.semantic-health-actions { display: flex; flex-wrap: wrap; gap: 0.5rem; }
+.semantic-health p { overflow-wrap: anywhere; }
+.knowledge-card h2:not(:first-child) { margin-top: 1.25rem; }

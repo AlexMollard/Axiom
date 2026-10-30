@@ -25,7 +25,7 @@ function routeFrom(url = new URL(location.href)) {
   const p = url.searchParams;
   if (p.has('note')) return { kind: 'note', path: p.get('note'), edit: p.get('edit') === '1', hash: url.hash, reviewWorkspace: p.get('reviewWorkspace') || 'all', reviewKind: p.get('reviewKind') || 'all' };
   if (p.get('edit') === '1') return { kind: 'new' };
-  if (p.has('q')) return { kind: 'search', query: p.get('q'), workspace: p.get('workspace') || '', owner: p.get('owner') || '', review: p.get('review') || '', scope: p.get('scope') || 'all' };
+  if (p.has('q')) return { kind: 'search', query: p.get('q'), workspace: p.get('workspace') || '', owner: p.get('owner') || '', review: p.get('review') || '', scope: p.get('scope') || 'all', mode: p.get('mode') === 'lexical' ? 'lexical' : 'hybrid' };
   if (p.has('project')) return { kind: 'project', id: p.get('project'), mode: ['graph', 'notes'].includes(p.get('mode')) ? p.get('mode') : 'overview' };
   return { kind: labels[p.get('view')] ? p.get('view') : 'overview', ...(p.get('view') === 'review' ? { reviewWorkspace: p.get('reviewWorkspace') || 'all', reviewKind: p.get('reviewKind') || 'all' } : {}) };
 }
@@ -33,7 +33,7 @@ function routeUrl(route) {
   const p = new URLSearchParams();
   if (route.kind === 'note') { p.set('note', route.path); if (route.edit) p.set('edit', '1'); }
   else if (route.kind === 'new') p.set('edit', '1');
-  else if (route.kind === 'search') { p.set('q', route.query); for (const key of ['workspace', 'owner', 'review']) if (route[key]) p.set(key, route[key]); p.set('scope', route.scope || 'all'); }
+  else if (route.kind === 'search') { p.set('q', route.query); for (const key of ['workspace', 'owner', 'review']) if (route[key]) p.set(key, route[key]); p.set('scope', route.scope || 'all'); p.set('mode', route.mode === 'lexical' ? 'lexical' : 'hybrid'); }
   else if (route.kind === 'project') { p.set('project', route.id); if (route.mode && route.mode !== 'overview') p.set('mode', route.mode); }
   else if (route.kind !== 'overview') p.set('view', route.kind);
   if (route.kind === 'review' || route.kind === 'note') for (const key of ['reviewWorkspace', 'reviewKind']) if (route[key] && route[key] !== 'all') p.set(key, route[key]);
@@ -120,7 +120,7 @@ export default function App() {
     if (!sameEditor && !bypass && !guard()) { setQuery(routeRef.current.kind === 'search' ? routeRef.current.query : ''); return false; }
     if (!sameEditor) dirty.current = false;
     // Do not mount the destination until its catalogue request completes.
-    if (['kind', 'path', 'edit', 'id', 'mode'].some(key => next[key] !== routeRef.current[key])) setLoading(true);
+    if (['kind', 'path', 'edit', 'id'].some(key => next[key] !== routeRef.current[key]) || (next.kind === 'project' && next.mode !== routeRef.current.mode)) setLoading(true);
     routeRef.current = next;
     if (mode !== 'none') history[mode === 'replace' ? 'replaceState' : 'pushState']({}, '', routeUrl(next));
     setQuery(next.kind === 'search' ? next.query : ''); setVisible(48); setRoute(next); return true;
@@ -164,7 +164,7 @@ export default function App() {
       } catch (e) { if (id === request.current) { setError(e.message || 'Unable to read the vault.'); setLoading(false); } }
     })();
     return () => { request.current++; };
-  }, [route.kind, route.path, route.edit, route.id, route.mode, refresh]);
+  }, [route.kind, route.path, route.edit, route.id, route.kind === 'project' ? route.mode : null, refresh]);
   useEffect(() => {
     if (route.kind !== 'note' || route.edit || !data || data.note.path !== route.path || !route.hash) return;
     let id; try { id = decodeURIComponent(route.hash.slice(1)); } catch { return; }
@@ -240,7 +240,7 @@ export default function App() {
   else if (route.kind === 'note' && data) content = <Reader key={JSON.stringify([catalog?.vaultId, data.note.path])} data={data} notes={notes} vaultName={vault} groups={groups} reviewScope={reviewScope} onReview={review} reviewBusy={reviewBusy} reviewError={reviewError} onNext={() => nextReview()} onDelete={() => setManagement('note')} onOpenNote={path => navigate({kind: 'note', path})} onRestored={({note, html}) => { setCatalog(c => c ? { ...c, notes: c.notes.map(n => n.path === note.path ? note : n) } : c); if (routeRef.current.kind === 'note' && !routeRef.current.edit && routeRef.current.path === note.path) setData({note, html}); }} />;
   else if (route.kind === 'overview') content = <Overview notes={notes} groups={groups} data={data} activity={activity} setActivity={setActivity} />;
   else if (route.kind === 'trash') content = <Trash onRestored={() => api('/api/catalog').then(setCatalog).catch(e => setError(e.message))} />;
-  else if (route.kind === 'search') content = <><PageHeading title="Search results" description={`Matches for “${route.query}” in ${route.scope === 'active' ? 'active knowledge' : 'all notes'}.`} /><SearchResults query={route.query} groups={groups} filters={{workspace: route.workspace || '', owner: route.owner || '', review: route.review || '', scope: route.scope || 'all'}} onFiltersChange={filters => navigate({...route, ...filters})} /></>;
+  else if (route.kind === 'search') content = <><PageHeading title="Search results" description={`Matches for “${route.query}” in ${route.scope === 'active' ? 'active knowledge' : 'all notes'}.`} /><SearchResults key={JSON.stringify([route.query, route.workspace, route.owner, route.review, route.scope, route.mode])} query={route.query} groups={groups} filters={{workspace: route.workspace || '', owner: route.owner || '', review: route.review || '', scope: route.scope || 'all', mode: route.mode || 'hybrid'}} onFiltersChange={filters => navigate({...route, ...filters})} /></>;
   else if (route.kind === 'health') content = <><PageHeading title="Memory health" description="Actionable findings, with uncertainty and provenance preserved." /><MemoryHealth groups={groups} onOpenNote={path => navigate({kind: 'note', path})} /></>;
   else if (route.kind === 'usage') content = <UsagePage groups={groups} />;
   else if (route.kind === 'harnesses') content = <HarnessPage />;

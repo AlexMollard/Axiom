@@ -61,7 +61,13 @@ In the browser, **Inspect knowledge** follows explicit `supersedes` and `conflic
 
 ## Search, drafts and note history
 
-Search uses local SQLite FTS5/BM25, with weighted title, path and content matches. It supports short terms such as `UI` and distinguishes `C++` from `C#`. Results include a heading, source line, passage and match reason; opening one focuses its section. Required owner policies are loaded separately rather than depending on search ranking. Search remains lexical, not a promise of semantic understanding.
+Search uses local SQLite FTS5/BM25, with weighted title, path and content matches. It supports short terms such as `UI` and distinguishes `C++` from `C#`. When configured, local Qwen embeddings add semantic candidates, fused with lexical ranking; results carry a heading, source offset/line, passage, revision and honest match reason. Opening a result focuses its section. The browser presents lexical results immediately and then hybrid results, with URL-backed mode and filters.
+
+CLI, MCP and omp searches default to hybrid when embeddings are enabled; pass `--mode lexical` to CLI or `mode: "lexical"` to the search tool to avoid inference. Response `semantic` metadata distinguishes disabled, sleeping, incomplete and unavailable retrieval. Missing inference never silently pretends to be complete semantic search: lexical results remain usable. Read matched sources before relying on them.
+
+Automatic owner-policy hooks never perform model inference. They may reuse persisted query/document vectors but otherwise retain lexical references; this prevents a background wake from blocking a model session or consuming GPU memory. Required owner policies always bypass ranking and remain mandatory. Embedding/index maintenance is not a usage receipt; only delivered excerpts/context count.
+
+Capture suggestions and each note's Knowledge panel include semantic overlaps/related notes within the permitted workspace and global scope. Similarity is not agreement, contradiction, approval or proof of duplication. No note is rewritten, merged, linked or reviewed automatically. Vectors do not change owner precedence.
 
 The command palette shows up to 20 recently opened notes for this vault on this browser. These are navigation preferences, not agent-usage receipts. Missing notes are omitted.
 

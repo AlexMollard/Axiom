@@ -108,8 +108,13 @@ function similarity(title, body, note) {
   return { score, reasons };
 }
 function ranked(title, body, notes, limit) {
-  return notes.map(note => ({ note: summaryOf(note), ...similarity(title, body, note) }))
-    .filter(item => item.score > 0)
+  return notes.map(note => {
+    const lexical = similarity(title, body, note);
+    const semanticScore = note.semanticScore;
+    return {note: summaryOf(note), score: lexical.score + (semanticScore === undefined ? 0 : semanticScore * 20),
+      reasons: [...lexical.reasons, ...(semanticScore === undefined ? [] : ['Semantic similarity; inspect both sources before treating them as duplicates'])],
+      ...(semanticScore === undefined ? {} : {semanticScore})};
+  }).filter(item => item.score > 0)
     .sort((a, b) => b.score - a.score || a.note.path.localeCompare(b.note.path))
     .slice(0, limit);
 }
@@ -120,15 +125,23 @@ function references(value) {
 }
 
 async function overlapCandidates(config, project, title, body, exclude) {
-  const query = [...new Set([...words(title), ...words(body)])].slice(0, 24).join(' ');
-  if (!query) return { notes: [], warnings: [] };
+  const query = [title, body].join('\n').trim().slice(0, 4000);
+  if (!query) return {notes: [], warnings: [], semantic: {enabled: Boolean(config.embeddings?.enabled), state: 'empty'}};
   const scopes = project === 'global' || project === 'unmapped' ? ['global'] : [project, 'global'];
-  const results = await Promise.all(scopes.map(workspace => search(config, query, { all: true, workspace, limit: MAX_CANDIDATES })));
+  const retrievalConfig = config.embeddings?.enabled
+    ? {...config, embeddings: {...config.embeddings, minSimilarity: Math.max(0.5, config.embeddings.minSimilarity ?? 0.35)}}
+    : config;
+  const results = await Promise.all(scopes.map(workspace => search(retrievalConfig, query, {all: true, workspace, limit: MAX_CANDIDATES})));
   const found = results.flatMap(result => result.items).filter(note => note.path !== exclude && eligible(note));
   found.sort((a, b) => b.score - a.score || a.path.localeCompare(b.path));
   const selected = found.slice(0, MAX_CANDIDATES);
   const partial = results.some(result => result.hasMore) || found.length > selected.length;
-  return { notes: await loadContents(config, selected), warnings: partial ? ['Overlap analysis is limited to 50 search-selected candidates.'] : [] };
+  const full = await loadContents(config, selected);
+  const notes = full.map((note, index) => selected[index].revision === note.revision && selected[index].semanticScore !== undefined ? {...note, semanticScore: selected[index].semanticScore} : note);
+  const degraded = results.map(result => result.semantic).filter(status => status?.enabled && !['ready', 'sleeping'].includes(status.state));
+  return {notes, semantic: degraded[0] || results[0]?.semantic,
+    warnings: [...(partial ? ['Overlap analysis is limited to 50 search-selected candidates.'] : []),
+      ...new Set(degraded.map(status => status.reason || `Semantic retrieval ${status.state}; shared-term suggestions remain available.`))]};
 }
 
 export async function getNoteKnowledge(config, relative) {
@@ -183,7 +196,9 @@ export async function getNoteKnowledge(config, relative) {
   const candidates = await overlapCandidates(config, current.project, current.title, body, current.path);
   warnings.push(...candidates.warnings);
   const overlaps = ranked(current.title, body, candidates.notes, 5);
-  return { path: current.path, currentRevision: current.revision, timeline, conflicts, overlaps, warnings };
+  const related = candidates.notes.filter(note => note.semanticScore !== undefined).sort((a, b) => b.semanticScore - a.semanticScore).slice(0, 5)
+    .map(note => ({note: summaryOf(note), score: note.semanticScore, reason: 'Semantic similarity; not proof of agreement or duplication.'}));
+  return {path: current.path, currentRevision: current.revision, timeline, conflicts, overlaps, related, semantic: candidates.semantic, warnings};
 }
 
 export async function getCaptureSuggestions(config, { cwd = process.cwd(), workspace, path = '', content, limit = 5 } = {}) {
@@ -194,5 +209,5 @@ export async function getCaptureSuggestions(config, { cwd = process.cwd(), works
   const { fields, body } = contentParts(content);
   const title = fields.title || body.match(/^#\s+(.+)$/m)?.[1] || path.split('/').pop()?.replace(/\.md$/i, '') || '';
   const candidates = await overlapCandidates(config, project, title, body, path);
-  return { project, items: ranked(title, body, candidates.notes, limit), warnings: candidates.warnings };
+  return {project, items: ranked(title, body, candidates.notes, limit), warnings: candidates.warnings, semantic: candidates.semantic};
 }

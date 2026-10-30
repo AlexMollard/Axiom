@@ -9,7 +9,7 @@ import path from 'node:path';
 import { createHash, randomBytes, timingSafeEqual } from 'node:crypto';
 import MarkdownIt from 'markdown-it';
 import sanitizeHtml from 'sanitize-html';
-import { catalog, readNote, search, loadConfig, backup, saveFromEditor, saveReviewFromEditor, hash } from './memory.mjs';
+import { catalog, readNote, search, loadConfig, backup, saveFromEditor, saveReviewFromEditor, refreshEmbeddings, hash } from './memory.mjs';
 import { buildWorkspaceGraph } from './workspace-graph.mjs';
 import { readWorkspaceIcons, searchWorkspaceIcons } from './workspace-icons.mjs';
 import { workspaceDetail, updateWorkspace, deleteNote, deleteWorkspace, listTrash, restoreTrash, protectedDeletionReason } from './management.mjs';
@@ -18,6 +18,7 @@ import {getWorkspaceOverview, getMemoryHealth, getNoteKnowledge, getCaptureSugge
 import {getHarnessStatus} from './harness-status.mjs';
 import {getRecoveryStatus, createRecoverySnapshot, checkRecoverySnapshot} from './recovery.mjs';
 import {inventoryUsage, getNoteUsage} from './note-usage.mjs';
+import {embeddingStatus} from './embeddings.mjs';
 import {getNoteHistory, getNoteHistoryRevision, restoreNoteHistoryFromEditor} from './note-history.mjs';
 import {headingSlug, resolveNote} from './note-links.mjs';
 
@@ -142,12 +143,14 @@ export function createServer(config, configId = null) {
       const recovery = req.method === 'POST' && ['/api/recovery/backup', '/api/recovery/check'].includes(url.pathname);
       const historyRestore = req.method === 'POST' && url.pathname === '/api/note-history/restore';
       const capturePreview = req.method === 'POST' && url.pathname === '/api/capture-suggestions';
-      if (!read && !save && !preview && !review && !management && !recovery && !historyRestore && !capturePreview) { res.setHeader('Allow', 'GET, HEAD, PUT, POST, DELETE'); return json(405, { error: 'Method not allowed' }); }
-      if (save || preview || review || management || recovery || historyRestore || capturePreview) {
+      const semanticReindex = req.method === 'POST' && url.pathname === '/api/embeddings/reindex';
+      if (!read && !save && !preview && !review && !management && !recovery && !historyRestore && !capturePreview && !semanticReindex) { res.setHeader('Allow', 'GET, HEAD, PUT, POST, DELETE'); return json(405, { error: 'Method not allowed' }); }
+      if (save || preview || review || management || recovery || historyRestore || capturePreview || semanticReindex) {
         if (req.headers.origin !== `http://${host.toLowerCase()}` || req.headers['sec-fetch-site'] === 'cross-site') return json(403, { error: 'Editor requests must originate from this site.' });
         const token = req.headers['x-shared-brain-csrf'];
         if (typeof token !== 'string' || !/^[a-f0-9]{64}$/.test(token) || !timingSafeEqual(Buffer.from(token, 'hex'), csrf)) return json(403, { error: 'Editor session is missing or expired. Reload the editor session; your draft has not been saved.' });
         const body = await readJson(req);
+        if (semanticReindex) return json(200, await refreshEmbeddings(config));
         if (capturePreview) {
           if (typeof body.path !== 'string' || typeof body.content !== 'string' || Buffer.byteLength(body.content) > 2 * 1024 * 1024) return json(400, {error: 'Provide a Markdown path and content no larger than 2 MiB.'});
           const workspace = body.workspace ?? /^Agents\/Memory\/Projects\/([^/]+)\//.exec(body.path)?.[1] ?? 'global';
@@ -210,6 +213,7 @@ export function createServer(config, configId = null) {
       if (url.pathname === '/api/note-knowledge') return json(200, await getNoteKnowledge(config, url.searchParams.get('path')));
       if (url.pathname === '/api/workspace-overview') return json(200, await getWorkspaceOverview(config, url.searchParams.get('id')));
       if (url.pathname === '/api/memory-health') return json(200, await getMemoryHealth(config, renderMarkdown));
+      if (url.pathname === '/api/embeddings') return json(200, await embeddingStatus(config));
       if (url.pathname === '/api/harnesses') return json(200, await getHarnessStatus(config));
       if (url.pathname === '/api/recovery') return json(200, await getRecoveryStatus(config));
       if (url.pathname === '/api/note-usage') return json(200, await getNoteUsage(config, await catalog(config)));
@@ -223,10 +227,17 @@ export function createServer(config, configId = null) {
       if (url.pathname === '/api/search') {
         const scope = url.searchParams.get('scope') ?? 'all';
         if (!['all', 'active'].includes(scope)) return json(400, {error: 'Search scope must be all or active.'});
-        return json(200, await search(config, url.searchParams.get('q') || '', {all: true, includeInactive: scope === 'all', workspace: url.searchParams.get('workspace') || '', owner: url.searchParams.get('owner') || '', review: url.searchParams.get('review') || '', offset: url.searchParams.get('offset') || 0, limit: url.searchParams.get('limit') || 50}));
+        const mode = url.searchParams.get('mode') || 'hybrid';
+        if (!['lexical', 'hybrid'].includes(mode)) return json(400, {error: 'Search mode must be lexical or hybrid.'});
+        const controller = new AbortController();
+        res.once('close', () => controller.abort());
+        const result = await search(config, url.searchParams.get('q') || '', {all: true, includeInactive: scope === 'all', mode, signal: controller.signal, workspace: url.searchParams.get('workspace') || '', owner: url.searchParams.get('owner') || '', review: url.searchParams.get('review') || '', offset: url.searchParams.get('offset') || 0, limit: url.searchParams.get('limit') || 50});
+        if (!res.destroyed) return json(200, result);
+        return;
       }
       return json(404, { error: 'Not found' });
     } catch (error) {
+      if (res.destroyed) return;
       return json(Number.isInteger(error.status) ? error.status : 400, { error: error.message || 'Unable to load resource' });
     }
   });

@@ -14,17 +14,34 @@ function Highlight({ text = '', query }) {
 
 export function SearchResults({ query, groups, filters, onFiltersChange }) {
   const [result, setResult] = useState(null), [error, setError] = useState(''), [offset, setOffset] = useState(0);
-  const workspace = filters.workspace || '', owner = filters.owner || '', review = filters.review || '', searchScope = filters.scope || 'all';
-  useEffect(() => { setOffset(0); }, [query, workspace, owner, review, searchScope]);
+  const [semanticMessage, setSemanticMessage] = useState(''), [retry, setRetry] = useState(0);
+  const workspace = filters.workspace || '', owner = filters.owner || '', review = filters.review || '', searchScope = filters.scope || 'all', mode = filters.mode || 'hybrid';
   useEffect(() => {
     const controller = new AbortController();
+    let active = true;
     const params = new URLSearchParams({ q: query, workspace, owner, review, scope: searchScope, offset: String(offset), limit: '50' });
-    setResult(null); setError('');
-    fetch('/api/search?' + params, { signal: controller.signal }).then(async response => {
+    setResult(null); setError(''); setSemanticMessage(mode === 'hybrid' ? 'Preparing semantic results; a sleeping model may take 10–40 seconds to wake and index.' : '');
+    const request = async searchMode => {
+      const requestParams = new URLSearchParams(params); requestParams.set('mode', searchMode);
+      const response = await fetch('/api/search?' + requestParams, { signal: controller.signal });
       const data = await response.json(); if (!response.ok) throw new Error(data.error || 'Search failed'); return data;
-    }).then(setResult).catch(err => { if (err.name !== 'AbortError') setError(err.message); });
-    return () => controller.abort();
-  }, [query, workspace, owner, review, searchScope, offset]);
+    };
+    const lexical = request('lexical').then(data => { if (active) setResult(data); }, err => { if (active) setError(err.message); });
+    if (mode === 'hybrid') {
+      const timeout = setTimeout(() => { if (active) { setSemanticMessage('Semantic search timed out. Lexical results remain available.'); controller.abort(); } }, 65000);
+      const hybrid = request('hybrid').then(data => ({ data }), err => ({ err }));
+      Promise.all([lexical, hybrid]).then(([, outcome]) => {
+        clearTimeout(timeout);
+        if (!active || controller.signal.aborted) return;
+        if (outcome.err) { setSemanticMessage(`Semantic search unavailable: ${outcome.err.message}. Lexical results remain available.`); return; }
+        setResult(outcome.data); setError('');
+        const status = outcome.data.semantic;
+        setSemanticMessage(status?.reason ? `Semantic search: ${status.reason}` : status && (status.enabled === false || ['unavailable', 'disabled', 'incomplete'].includes(status.state)) ? `Semantic search: ${status.state}. Lexical results remain available.` : '');
+      });
+      return () => { active = false; clearTimeout(timeout); controller.abort(); };
+    }
+    return () => { active = false; controller.abort(); };
+  }, [query, workspace, owner, review, searchScope, mode, offset, retry]);
   const sections = useMemo(() => {
     const buckets = new Map();
     for (const note of result?.items || []) { const id = scope(note, groups); if (!buckets.has(id)) buckets.set(id, []); buckets.get(id).push(note); }
@@ -40,9 +57,11 @@ export function SearchResults({ query, groups, filters, onFiltersChange }) {
       <label>Workspace<select value={workspace} onChange={e => change('workspace', e.target.value)}><option value="">All workspaces</option>{[...groups].sort((a,b) => (a.group === 'home' ? 1 : 0) - (b.group === 'home' ? 1 : 0) || a.name.localeCompare(b.name)).map(group => <option key={group.id} value={group.id}>{group.name}</option>)}</select></label>
       <label>Owner<select value={owner} onChange={e => change('owner', e.target.value)}><option value="">Everyone</option><option value="owner">Owner</option><option value="agent">Agent</option></select></label>
       <label>Review<select value={review} onChange={e => change('review', e.target.value)}><option value="">All review states</option><option value="reviewed">Reviewed</option><option value="unreviewed">Unreviewed</option></select></label>
+      <label>Search mode<select value={mode} onChange={e => change('mode', e.target.value)}><option value="hybrid">Lexical + semantic</option><option value="lexical">Lexical only</option></select></label>
     </div>
     <p className="search-scope">{searchScope === 'active' ? 'Active knowledge excludes proposals, handovers, archived and superseded notes.' : 'All notes includes proposals, handovers, archived and superseded notes.'}</p>
-    <p className="search-count" role="status" aria-live="polite" aria-atomic="true">{error ? `Search failed: ${error}` : !result ? 'Searching…' : `${result.total} ${result.total === 1 ? 'result' : 'results'}`}</p>
+    <p className="search-count" role="status" aria-live="polite" aria-atomic="true">{error && !result ? `Search failed: ${error}` : !result ? 'Searching…' : `${result.total} ${result.total === 1 ? 'result' : 'results'} · ${result.searchMode === 'hybrid' ? 'Hybrid' : 'Lexical'}${mode === 'hybrid' && semanticMessage.startsWith('Preparing') ? ' (semantic results pending)' : ''}`}</p>
+    {semanticMessage && <p className="search-semantic-status" role="status">{semanticMessage} {semanticMessage.startsWith('Semantic search') && <button type="button" className="button" onClick={() => setRetry(value => value + 1)}>Retry semantic search</button>}</p>}
     <div aria-busy={!result && !error}>{result && <>{!result.total && <p>No matching notes.</p>}{sections.map(([id, notes]) => <section className="search-section" key={id}><h2>{label(id, groups)}</h2>{notes.map(note => <a className="search-result" href={noteUrl(note.path) + (note.anchor ? '#' + encodeURIComponent(note.anchor) : '')} key={note.path}><strong><Highlight text={note.title} query={query} /></strong><small>{note.path} · {note.owner === 'owner' ? 'Owner' : note.reviewStatus === 'reviewed' ? 'Reviewed' : 'Unreviewed'}</small>{(note.heading || note.line || note.matchReason) && <small>{[note.heading, note.line ? `Line ${note.line}` : '', note.matchReason].filter(Boolean).join(' · ')}</small>}<div className="search-result-badges">{note.path.startsWith('Agents/Proposals/') && <span className="badge">Proposal</span>}{note.path.startsWith('Agents/Handovers/') && <span className="badge">Handover</span>}{['archived', 'superseded'].includes((note.status || '').toLowerCase()) && <span className="badge">{note.status}</span>}</div><span><Highlight text={note.excerpt} query={query} /></span></a>)}</section>)}<div className="search-pages"><button type="button" disabled={!offset} onClick={() => setOffset(Math.max(0, offset - 50))}>Previous</button><button type="button" disabled={!result.hasMore} onClick={() => setOffset(offset + 50)}>Next</button></div></>}</div>
   </section>;
 }

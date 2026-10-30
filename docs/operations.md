@@ -36,6 +36,25 @@ If npm reports `EEXIST` for an old CLI shim, inspect and back up that shim and v
 
 The index, usage database and harness observations live in `.state` beside the selected configuration, not in the checkout. Runtime PID, recovery counters and bounded application, health and launcher logs are isolated under `.state/runtime-<canonical-config-hash>/`, so distinct configuration files cannot overwrite one another's runtime ownership. Each of the three logs is bounded to 1 MiB. Native warnings remain enabled and are also recorded in the application log. Treat this state as private alongside the configuration, vault and backups.
 
+## Semantic search operation
+
+Optional embeddings use the existing local Ollama service; Axiom creates no additional always-running model daemon. `axiom-memory embeddings` and Memory health report model identity, sleeping/loaded/unavailable state and cached document chunks without loading the model. Reported model GPU allocation is not whole-device consumption.
+
+`axiom-memory index-embeddings` or the human **Reindex active notes** action builds missing vectors without changing canonical notes or review state. Edits and external Obsidian changes are checked at the next search/reindex; only changed chunks require inference. Deleted or excluded notes cannot be recovered as results from old cached vectors. Browser **All notes** deliberately includes retired material; **Active knowledge** and normal native search exclude it.
+
+The private `.state/embeddings.sqlite` cache stores hashes, model/format fingerprints and float vectors, not raw note/query text or note paths. Treat embeddings as sensitive derived data, not encryption or a backup. It bounds stored vector payload to 64 MiB and 16,384 rows; SQLite metadata/free pages/WAL and live processing use additional space/RAM. Derived old vectors may remain until bounded eviction; deleting a canonical note is not immediate erasure of its historical derivatives. Clear the cache deliberately with Axiom and harness processes stopped if erasure is required.
+
+New inference refreshes the model's two-minute idle keep-alive. Cached-only searches do not wake it. Other Ollama clients can retain the same model longer, and memory pressure may cause earlier unloading. Cold loads are expected. Axiom never kills another model or automatically starts/repairs Ollama; if unavailable, lexical search remains available with explicit semantic status. Only loopback HTTP origins and pinned local model identities are accepted; known remote/cloud proxies and redirects are rejected.
+
+Disable semantic retrieval while preserving the model/cache:
+
+```powershell
+npm run setup:embeddings -- --disable
+./scripts/start.ps1 -Restart
+```
+
+Restart cached harness sessions too. Existing inference expires through idle keep-alive; disabling does not delete user models, stop Ollama or bypass an in-flight operation. Re-enable through the [verified model setup](getting-started.md#optional-local-semantic-retrieval). Configuration updates preserve newer workspace settings and archive the previous bytes before changing the embedding field.
+
 ## Security and privacy
 
 The server listens on loopback and uses a restrictive Content Security Policy, host and origin checks, and protections for mutation requests including cross-site requests. These reduce exposure, but do not authenticate other local users or processes. Protect access to the machine and private files accordingly.

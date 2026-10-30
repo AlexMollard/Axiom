@@ -13,10 +13,10 @@ export default function (pi: ExtensionAPI) {
 
   pi.registerTool({
     name: 'shared_memory_search', label: 'Search shared memory', approval: 'read',
-    description: 'Search global and current-project shared memory with source paths.',
-    parameters: Type.Object({ query: Type.String() }),
+    description: 'Search global and current-project memory with source revisions and local semantic matches when configured. Cold model loading may take tens of seconds. Optional mode is hybrid (default) or lexical (no inference); inspect semantic status for degraded retrieval.',
+    parameters: Type.Object({query: Type.String(), mode: Type.Optional(Type.String())}),
     async execute(_id, args, _signal, _update, ctx) {
-      try { return text(await search(await loadConfig(), args.query, { cwd: ctx.cwd, usage: { source: 'omp' } })); } catch (error) { return failure(error); }
+      try { return text(await search(await loadConfig(), args.query, {cwd: ctx.cwd, mode: args.mode || 'hybrid', signal: _signal, usage: {source: 'omp'}})); } catch (error) { return failure(error); }
     },
   });
   pi.registerTool({

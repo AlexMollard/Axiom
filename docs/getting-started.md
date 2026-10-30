@@ -74,6 +74,22 @@ Use your actual checkout, private configuration and project directory. Keep the 
 
 Each stdio client starts a process; Axiom does not add a permanently running MCP daemon. Enable only the integrations you use. The native installer does not register MCP servers or edit other clients' settings. MCP makes tools available, not mandatory; retain native policy hooks where configured and validate a fresh session before disabling another memory system.
 
+## Optional local semantic retrieval
+
+Lexical search requires no model. For semantic search, install and run [Ollama](https://ollama.com/download), then obtain the official [Qwen3-Embedding-0.6B Q8_0 GGUF](https://huggingface.co/Qwen/Qwen3-Embedding-0.6B-GGUF/resolve/main/Qwen3-Embedding-0.6B-Q8_0.gguf). The Apache-2.0 artifact is 639,150,592 bytes. Setup verifies SHA-256 `06507c7b42688469c4e7298b0a1e16deff06caf291cf0a5b278c308249c3e439` before importing anything.
+
+With the same private configuration selected as the application:
+
+```powershell
+npm run setup:embeddings -- --model-file "C:/models/Qwen3-Embedding-0.6B-Q8_0.gguf"
+axiom-memory index-embeddings
+./scripts/start.ps1 -Restart
+```
+
+Setup accepts `--config "C:/private/axiom/config.json"` and an optional loopback `--endpoint`. It imports the verified artifact as `axiom-qwen3-embedding:latest`, pins the local manifest digest in private configuration, backs up the previous configuration and preserves unrelated settings. It refuses to overwrite an existing alias with different/unverified weights. It does not download a model, start Ollama, alter its global settings, or configure its login startup. Ollama must be available; Axiom's watchdog supervises Axiom, not Ollama.
+
+Ollama selects available GPU acceleration. Axiom requests a 2,048-token context, 256-token batch, 1,024 dimensions and a two-minute inference idle keep-alive. Cold loading can take tens of seconds; the browser shows lexical results first. Model allocation is not a total VRAM guarantee. Restart cached harness sessions after upgrading. See [operation and disabling](operations.md#semantic-search-operation) and [measurement boundaries](development.md#retrieval-qualification-and-optional-embeddings).
+
 ## Start the application
 
 ```powershell

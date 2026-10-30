@@ -10,6 +10,7 @@ import {REVIEW_LEDGER_PATH, validateAgentNotePath, parseReviewLedger, serializeR
 import {preserveReviewedRevision} from './review-history.mjs';
 import {recordUsage} from './note-usage.mjs';
 import {queryWords, lexicalTerms, rankEntries, passageEvidence} from './search-index.mjs';
+import {embeddingSettings, embeddingStatus, semanticSearch} from './embeddings.mjs';
 
 const appDir = path.dirname(fileURLToPath(import.meta.url));
 const hash = value => createHash('sha256').update(value).digest('hex');
@@ -32,6 +33,7 @@ export async function loadConfig(configPath = process.env.SHARED_BRAIN_CONFIG ||
   config.projects ||= [];
   config.indexPath = path.join(path.dirname(path.resolve(configPath)), '.state', `index-${hash(config.vault).slice(0, 16)}.json`);
   config.configPath = path.resolve(configPath);
+  embeddingSettings(config);
   return config;
 }
 
@@ -195,7 +197,14 @@ function passageMatch(content, words) {
   return null;
 }
 
-export async function search(config, query, {cwd = process.cwd(), limit = 12, all = false, includeInactive = false, workspace = '', owner = '', review = '', offset = 0, usage = null} = {}) {
+function activeKnowledge(note) {
+  return !['superseded', 'archived', 'stale', 'retired', 'proposal'].includes((note.status || '').toLowerCase()) &&
+    (note.kind || '').toLowerCase() !== 'proposal' && !/^Agents\/(?:Handovers|Proposals)\//i.test(note.path);
+}
+
+export async function search(config, query, {cwd = process.cwd(), limit = 12, all = false, includeInactive = false, workspace = '', owner = '', review = '', offset = 0, usage = null, mode = 'hybrid', warmOnly = false, signal} = {}) {
+  if (!['lexical', 'hybrid'].includes(mode)) throw new Error('Search mode must be lexical or hybrid.');
+  signal?.throwIfAborted();
   const project = projectFor(config, cwd);
   const words = queryWords(query);
   if (!words.length) return {query, project, count: 0, total: 0, hasMore: false, items: []};
@@ -203,14 +212,29 @@ export async function search(config, query, {cwd = process.cwd(), limit = 12, al
   const start = Math.max(0, Math.floor(Number(offset) || 0));
   const projects = new Set(config.projects.map(item => item.id));
   const eligible = note => (all || ['global', project].includes(note.project)) &&
-    (includeInactive || (!['superseded','archived','stale','retired'].includes((note.status || '').toLowerCase()) &&
-    !note.path.startsWith('Agents/Handovers/') && !note.path.startsWith('Agents/Proposals/'))) &&
+    (includeInactive || activeKnowledge(note)) &&
     (!workspace || workspace === 'all' || (workspace === '__unmapped' ? note.project !== 'global' && !projects.has(note.project) : note.project === workspace)) &&
     (!owner || owner === 'all' || note.owner === owner) &&
     (!review || review === 'all' || note.reviewStatus === review);
   const entries = (await indexedNotes(config)).filter(({note}) => all || ['global', project].includes(note.project));
-  const matches = await rankEntries(entries, words, JSON.stringify([config.vault, all ? 'all' : project]));
   const reviews = await readReviews(config);
+  const lexical = await rankEntries(entries, words, JSON.stringify([config.vault, all ? 'all' : project]));
+  const semantic = mode === 'hybrid'
+    ? await semanticSearch(config, entries.filter(({note}) => eligible(applyReview(note, reviews))), query, {limit: 100, warmOnly, signal, timeoutMs: warmOnly ? 1200 : 60000})
+    : {matches: [], status: {enabled: Boolean(config.embeddings?.enabled), state: 'lexical', reason: 'Lexical search selected.'}};
+  signal?.throwIfAborted();
+  const semanticByPath = new Map(semantic.matches.map(hit => [hit.path, hit]));
+  let matches = lexical;
+  if (semantic.matches.length) {
+    const combined = new Map();
+    lexical.forEach((hit, index) => combined.set(hit.path, {...hit, lexical: true, score: 1 / (60 + index + 1)}));
+    semantic.matches.forEach((hit, index) => {
+      const previous = combined.get(hit.path);
+      combined.set(hit.path, {...(previous || {path: hit.path}), score: (previous?.score || 0) + 1 / (60 + index + 1)});
+    });
+    matches = [...combined.values()].sort((a, b) => b.score - a.score || a.path.localeCompare(b.path));
+  }
+  const currentReviews = mode === 'hybrid' && semantic.status.enabled ? await readReviews(config) : reviews;
   const items = [];
   let total = 0;
   for (let batchStart = 0; batchStart < matches.length;) {
@@ -224,17 +248,30 @@ export async function search(config, query, {cwd = process.cwd(), limit = 12, al
         throw reads[i].reason;
       }
       const {content, ...rawNote} = reads[i].value;
-      const note = applyReview(rawNote, reviews);
+      const note = applyReview(rawNote, currentReviews);
       const terms = new Set(lexicalTerms(`${note.title} ${note.path} ${content}`));
-      if (!words.some(word => terms.has(word)) || !eligible(note)) continue;
+      const semanticHit = semanticByPath.get(note.path);
+      const freshSemantic = semanticHit?.revision === note.revision ? semanticHit : null;
+      const lexicalMatch = words.some(word => terms.has(word));
+      if ((!lexicalMatch && !freshSemantic) || !eligible(note)) continue;
       if (total >= start && items.length < maximum) {
-        items.push({...note, ...passageEvidence(content, note.title, note.path, words), score: batch[i].score});
+        const evidence = freshSemantic && !lexicalMatch
+          ? {excerpt: freshSemantic.excerpt, heading: freshSemantic.heading, anchor: freshSemantic.anchor, line: freshSemantic.line, start: freshSemantic.start, matchReason: 'Semantic similarity; inspect the source'}
+          : passageEvidence(content, note.title, note.path, words);
+        items.push({...note, ...evidence, ...(freshSemantic ? {semanticScore: freshSemantic.similarity, matchReason: lexicalMatch ? `${evidence.matchReason}; semantic similarity` : evidence.matchReason} : {}), score: batch[i].score});
       }
       total++;
     }
   }
+  signal?.throwIfAborted();
   if (usage) await recordUsage(config, items, 'excerpt', usage.source);
-  return {query, project, count: items.length, items, ...(all ? {total, hasMore: start + items.length < total} : {})};
+  return {query, project, count: items.length, items, searchMode: mode, semantic: semantic.status, ...(all ? {total, hasMore: start + items.length < total} : {})};
+}
+
+export async function refreshEmbeddings(config) {
+  const entries = (await indexedNotes(config)).filter(({note}) => activeKnowledge(note));
+  const result = await semanticSearch(config, entries, '', {limit: 0, timeoutMs: 120000});
+  return {...result.status, scannedNotes: entries.length};
 }
 
 export async function policies(config, cwd = process.cwd(), query = '', usage = null) {
@@ -255,13 +292,16 @@ export async function policies(config, cwd = process.cwd(), query = '', usage = 
   if (!Number.isSafeInteger(maxBytes) || maxBytes < 0) throw new Error('Policy context byte budget must be a non-negative integer.');
   if (Buffer.byteLength([...parts, footer].join('\n\n')) > maxBytes) throw new Error(`Required policies exceed the ${maxBytes}-byte context budget; reduce policy scope rather than truncating rules.`);
   if (query) {
-    const result = await search(config, query, {cwd, limit: 4});
+    const result = await search(config, query, {cwd, limit: 4, warmOnly: true});
     for (const item of result.items) {
       if (paths.includes(item.path)) continue;
       const note = await readNote(config, item.path);
       const match = passageMatch(note.content, queryWords(query));
-      if (!match) continue;
-      const hit = match.index, matchEnd = match.end;
+      const semanticEvidence = item.semanticScore !== undefined && item.revision === note.revision;
+      if (!match && !semanticEvidence) continue;
+      const semanticStart = Number.isInteger(item.start) && item.start >= 0 ? item.start : semanticEvidence ? note.content.split(/(?<=\n)/).slice(0, Math.max(0, (item.line || 1) - 1)).join('').length : 0;
+      const hit = match?.index ?? semanticStart;
+      const matchEnd = match?.end ?? Math.min(note.content.length, hit + item.excerpt.length);
       let start = Math.max(0, hit - 80), end = Math.min(note.content.length, Math.max(matchEnd, hit + 420));
       const makeReference = () => `REFERENCE ${note.path} · ${note.owner} · ${note.status} · revision ${note.revision}\n${note.content.slice(start, end)}${start || end < note.content.length ? '\n[Excerpt; read the source for full context.]' : ''}`;
       let reference = makeReference();
@@ -548,7 +588,9 @@ async function main() {
   switch(command) {
     case 'policy': console.log(await policies(config,flags.cwd,flags.query,{source:'cli'})); return;
     case 'catalog': result=await catalog(config); break;
-    case 'search': result=await search(config,flags.query || '',{cwd:flags.cwd,limit:flags.limit === undefined ? 12 : Number(flags.limit),usage:{source:'cli'}}); break;
+    case 'search': result=await search(config,flags.query || '',{cwd:flags.cwd,limit:flags.limit === undefined ? 12 : Number(flags.limit),mode:flags.mode || 'hybrid',usage:{source:'cli'}}); break;
+    case 'embeddings': result=await embeddingStatus(config); break;
+    case 'index-embeddings': result=await refreshEmbeddings(config); if (!['ready', 'sleeping'].includes(result.state)) process.exitCode=1; break;
     case 'read': result=await readNote(config,flags.path,{source:'cli'}); break;
     case 'write': { let input=''; for await (const chunk of process.stdin) {input+=chunk; if(Buffer.byteLength(input)>2*1024*1024) throw new Error('Input exceeds 2 MiB.');} result=await writeNote(config,flags.path,input,flags.expected,flags['workspace-icon']); break; }
     case 'knowledge': { const {getNoteKnowledge} = await import('./knowledge.mjs'); result = await getNoteKnowledge(config, flags.path); break; }
@@ -556,7 +598,7 @@ async function main() {
     case 'workspace-icons': result=await searchWorkspaceIcons(config,flags.query || '',flags.limit === undefined ? 24 : Number(flags.limit)); break;
     case 'backup': result=await backup(config); break;
     case 'restore': if(!flags.snapshot || !flags.target) throw new Error('restore requires --snapshot and --target.'); result=await restore(config,flags.snapshot,flags.target); break;
-    default: throw new Error('Commands: policy, catalog, search, read, write, knowledge, capture, workspace-icons, backup, restore.');
+    default: throw new Error('Commands: policy, catalog, search, read, write, knowledge, capture, embeddings, index-embeddings, workspace-icons, backup, restore.');
   }
   console.log(JSON.stringify(result,null,2));
 }

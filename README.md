@@ -20,7 +20,7 @@ Axiom brings personal notes, project decisions and coding-agent memory into one 
 | **A review workflow for agent memory** | See new and changed findings, compare revisions, and review the exact content you checked. Later edits invalidate that approval. |
 | **Context across connected tools** | Use native Claude Code and omp integrations, the guarded MCP server for explicitly configured clients, or the CLI. |
 | **Evidence, not imaginary certainty** | Inspect recorded memory deliveries, provenance and cleanup candidates. Quiet history is not proof that a note is disposable. |
-| **Find the useful passage** | Full-text ranking supports short technical terms and section links. Inspect replacement chains, recorded conflicts and possible overlaps before adding another finding. |
+| **Find the useful passage** | Full-text ranking supports short technical terms and section links. Add [local GPU semantic retrieval](docs/getting-started.md#optional-local-semantic-retrieval) for paraphrases, related notes and duplicate-capture suggestions, without changing note authority. |
 
 ## You own the rules
 
