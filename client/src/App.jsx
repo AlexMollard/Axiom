@@ -1,5 +1,5 @@
 import React, { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { ArrowRight, ArrowUpRight, Bot, Check, ChevronRight, FileText, FolderKanban, LayoutDashboard, List, Network, Plus, RefreshCw, Search, ShieldCheck, UserRound, Inbox, Undo2, Trash2, Settings, Activity, Plug, DatabaseBackup, Command } from 'lucide-react';
+import { ArrowRight, ArrowUpRight, Bot, Check, ChevronRight, FileText, FolderKanban, LayoutDashboard, List, Network, Plus, RefreshCw, Search, ShieldCheck, UserRound, Inbox, Undo2, Trash2, Settings, Activity, Plug, DatabaseBackup, Command, ScanSearch } from 'lucide-react';
 import WorkspaceIcon from './WorkspaceIcon.jsx';
 import { DeleteNote, WorkspaceSettings, Trash } from './Management.jsx';
 import {SearchResults, CommandPalette} from './SearchExperience.jsx';
@@ -9,11 +9,12 @@ import HarnessPage from './HarnessPage.jsx';
 import RecoveryPage from './RecoveryPage.jsx';
 import Notifications from './Notifications.jsx';
 import UsagePage, { UsageSummary } from './UsageViews.jsx';
+import Cleanup from './Cleanup.jsx';
 
 const MarkdownEditor = lazy(() => import('./MarkdownEditor.jsx'));
 const NoteHistory = lazy(() => import('./NoteHistory.jsx'));
 const WorkspaceGraph = lazy(() => import('./WorkspaceGraph.jsx'));
-const labels = { all: 'All notes', owner: 'Your notes', agent: 'Agent memory', review: 'Review queue', proposals: 'Review queue', projects: 'Workspaces', trash: 'Trash', health: 'Memory health', harnesses: 'Harnesses', recovery: 'Backups & recovery', usage: 'Note usage' };
+const labels = { all: 'All notes', owner: 'Your notes', agent: 'Agent memory', review: 'Review queue', proposals: 'Review queue', projects: 'Workspaces', trash: 'Trash', health: 'Memory health', cleanup: 'Clean up', harnesses: 'Harnesses', recovery: 'Backups & recovery', usage: 'Note usage' };
 const projectLabel = (id, groups = []) => groups.find(g => g.id === id)?.name || (id === '__unmapped' ? 'Unmapped notes' : id === 'global' ? 'General' : (id || 'General').replaceAll('-', ' ').replace(/^./, c => c.toUpperCase()));
 const pendingReview = note => note.owner === 'agent' && note.reviewStatus === 'unreviewed' && !['archived', 'superseded'].includes((note.status || '').toLowerCase());
 const reviewLabel = note => note.owner === 'owner' ? 'Owner' : note.reviewStatus === 'reviewed' ? 'Reviewed' : 'Unreviewed';
@@ -232,7 +233,7 @@ export default function App() {
     } catch (e) { setReviewError(e.message || 'Could not save review. Try again.'); }
     finally { setReviewBusy(false); }
   };
-  const nav = [['overview', 'Overview', LayoutDashboard], ['all', 'All notes', FileText], ['owner', 'Your notes', UserRound], ['agent', 'Agent memory', Bot], ['review', 'Review queue', Inbox], ['projects', 'Workspaces', FolderKanban], ['trash', 'Trash', Trash2]];
+  const nav = [['overview', 'Overview', LayoutDashboard], ['all', 'All notes', FileText], ['owner', 'Your notes', UserRound], ['agent', 'Agent memory', Bot], ['review', 'Review queue', Inbox], ['projects', 'Workspaces', FolderKanban], ['cleanup', 'Clean up', ScanSearch], ['trash', 'Trash', Trash2]];
   let content;
   if (loading) content = <div className="boot">Reading your vault…</div>;
   else if (error && !data && route.kind !== 'new') content = <><h1>Could not load this view</h1><p className="muted">Your source files have not been changed.</p><button className="button" onClick={refreshView}>Try again</button></>;
@@ -241,7 +242,8 @@ export default function App() {
   else if (route.kind === 'overview') content = <Overview notes={notes} groups={groups} data={data} activity={activity} setActivity={setActivity} />;
   else if (route.kind === 'trash') content = <Trash onRestored={() => api('/api/catalog').then(setCatalog).catch(e => setError(e.message))} />;
   else if (route.kind === 'search') content = <><PageHeading title="Search results" description={`Matches for “${route.query}” in ${route.scope === 'active' ? 'active knowledge' : 'all notes'}.`} /><SearchResults key={JSON.stringify([route.query, route.workspace, route.owner, route.review, route.scope, route.mode])} query={route.query} groups={groups} filters={{workspace: route.workspace || '', owner: route.owner || '', review: route.review || '', scope: route.scope || 'all', mode: route.mode || 'hybrid'}} onFiltersChange={filters => navigate({...route, ...filters})} /></>;
-  else if (route.kind === 'health') content = <><PageHeading title="Memory health" description="Actionable findings, with uncertainty and provenance preserved." /><MemoryHealth groups={groups} onOpenNote={path => navigate({kind: 'note', path})} /></>;
+  else if (route.kind === 'health') content = <><PageHeading title="Memory health" description="Actionable findings, with uncertainty and provenance preserved." /><p><a className="button" href={routeUrl({kind: 'cleanup'})}>Clean up notes <ArrowRight size={16} aria-hidden="true" /></a></p><MemoryHealth groups={groups} onOpenNote={path => navigate({kind: 'note', path})} /></>;
+  else if (route.kind === 'cleanup') content = <Cleanup vaultId={catalog?.vaultId} groups={groups} onCatalogChanged={() => api('/api/catalog').then(value => { if (routeRef.current.kind === 'cleanup') setCatalog(value); }).catch(e => { if (routeRef.current.kind === 'cleanup') setError(e.message); })} />;
   else if (route.kind === 'usage') content = <UsagePage groups={groups} />;
   else if (route.kind === 'harnesses') content = <HarnessPage />;
   else if (route.kind === 'recovery') content = <RecoveryPage />;
@@ -261,7 +263,7 @@ export default function App() {
     <a className="skip" href="#main">Skip to content</a>
     <aside className="sidebar" aria-label="Vault navigation">
       <a className="brand" href="/"><span className="brand-mark">ax<span>.</span></span><span>Axiom<small>PERSONAL KNOWLEDGE</small></span></a>
-      <nav className="main-nav" aria-label="Library">{nav.map(([kind, label, Icon]) => <a key={kind} className={route.kind === kind || (kind === 'review' && route.kind === 'proposals') ? 'active' : ''} aria-current={route.kind === kind || (kind === 'review' && route.kind === 'proposals') ? 'page' : undefined} href={routeUrl({ kind })}><Icon className="nav-icon" size={18} strokeWidth={1.7} aria-hidden="true" />{label}{!['overview', 'projects', 'trash'].includes(kind) && <span className="nav-count">{kind === 'all' ? notes.length : kind === 'review' ? pending.length : notes.filter(n => n.owner === kind).length}</span>}</a>)}</nav>
+      <nav className="main-nav" aria-label="Library">{nav.map(([kind, label, Icon]) => <a key={kind} className={route.kind === kind || (kind === 'review' && route.kind === 'proposals') ? 'active' : ''} aria-current={route.kind === kind || (kind === 'review' && route.kind === 'proposals') ? 'page' : undefined} href={routeUrl({ kind })}><Icon className="nav-icon" size={18} strokeWidth={1.7} aria-hidden="true" />{label}{!['overview', 'projects', 'trash', 'cleanup'].includes(kind) && <span className="nav-count">{kind === 'all' ? notes.length : kind === 'review' ? pending.length : notes.filter(n => n.owner === kind).length}</span>}</a>)}</nav>
       <nav className="utility-nav" aria-label="Knowledge tools">{[['health', 'Health', Activity], ['usage', 'Usage', List], ['harnesses', 'Harnesses', Plug], ['recovery', 'Backups', DatabaseBackup]].map(([kind, label, Icon]) => <a key={kind} href={routeUrl({kind})} aria-current={route.kind === kind ? 'page' : undefined}><Icon size={16} aria-hidden="true" />{label}</a>)}</nav>
       <div className="sidebar-section"><span>WORKSPACES</span><a href="/?view=projects">All <ArrowRight size={18} strokeWidth={1.7} aria-hidden="true" /></a></div>
       <nav className="project-nav" aria-label="Workspaces">{['work', 'home'].map(folder => <div key={folder}><button className="workspace-folder" type="button" aria-expanded={!collapsed[folder]} onClick={() => { const next = { ...collapsed, [folder]: !collapsed[folder] }; setCollapsed(next); try { localStorage.setItem('axiom-workspace-folders', JSON.stringify(next)); } catch {} }}><ChevronRight size={16} className={collapsed[folder] ? '' : 'expanded'} aria-hidden="true" />{folder === 'home' ? 'Home' : 'Work'}</button>{!collapsed[folder] && groups.filter(g => g.group === folder).map(g => <a key={g.id} className={route.kind === 'project' && route.id === g.id ? 'active' : ''} aria-current={route.kind === 'project' && route.id === g.id ? 'page' : undefined} href={routeUrl({ kind: 'project', id: g.id })}><WorkspaceIcon name={g.icon} />{projectLabel(g.id, groups)}<span className="nav-count">{g.notes.length}</span></a>)}</div>)}</nav>
@@ -288,7 +290,7 @@ function Overview({ notes, groups, data, activity, setActivity }) {
   const folderWorkspaces = groups.filter(group => group.group === workspaceFolder).sort((a, b) => b.notes.length - a.notes.length).slice(0, workspaceFolder === 'work' ? 4 : 5);
   const activityNotes = latest(notes.filter(n => !proposal(n) && !n.path.startsWith('Agents/Handovers/') && (activity === 'all' || n.owner === activity))).slice(0, 6);
   return <>
-    <div className="page-heading"><div><p className="eyebrow">Your knowledge, together</p><h1>Overview</h1><p className="page-description">Notes, decisions, and context across your vault.</p></div><span className="page-date">{new Date().toLocaleDateString(undefined, { weekday: 'long', month: 'short', day: 'numeric' })}</span></div>
+    <div className="page-heading"><div><p className="eyebrow">Your knowledge, together</p><h1>Overview</h1><p className="page-description">Notes, decisions, and context across your vault.</p></div><div className="heading-actions"><span className="page-date">{new Date().toLocaleDateString(undefined, { weekday: 'long', month: 'short', day: 'numeric' })}</span><a className="button" href={routeUrl({kind: 'cleanup'})}><ScanSearch size={17} aria-hidden="true" />Clean up</a></div></div>
     <div className="metrics">{[['Notes in your vault', notes.length, 'all', FileText], ['Your notes', notes.filter(n => n.owner === 'owner').length, 'owner', UserRound], ['Agent memory', notes.filter(n => n.owner === 'agent').length, 'agent', Bot]].map(([label, count, kind, Icon]) => <a className="metric" href={routeUrl({ kind })} key={kind}><span className="metric-icon"><Icon size={18} strokeWidth={1.7} aria-hidden="true" /></span><span><span className="metric-label">{label}</span><strong className="metric-value">{count}</strong></span><ArrowUpRight className="metric-arrow" size={18} strokeWidth={1.7} aria-hidden="true" /></a>)}</div>
     <div className="dashboard-grid">
       <Panel title="Latest activity" className="panel-activity" action={<div className="segmented" aria-label="Filter latest activity">{[['all', 'All'], ['owner', 'Yours'], ['agent', 'Agents']].map(([v, label]) => <button key={v} type="button" className={activity === v ? 'active' : ''} aria-pressed={activity === v} onClick={() => setActivity(v)}>{label}</button>)}</div>}><div>{activityNotes.length ? activityNotes.map(n => <NoteRow key={n.path} note={n} />) : <Empty>No recent activity in this view.</Empty>}</div><div className="panel-footer"><span>Latest file changes · handovers hidden</span><a href="/?view=all">View library <ArrowRight size={18} strokeWidth={1.7} aria-hidden="true" /></a></div></Panel>

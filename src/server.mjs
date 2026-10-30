@@ -21,6 +21,7 @@ import {inventoryUsage, getNoteUsage} from './note-usage.mjs';
 import {embeddingStatus} from './embeddings.mjs';
 import {getNoteHistory, getNoteHistoryRevision, restoreNoteHistoryFromEditor} from './note-history.mjs';
 import {headingSlug, resolveNote} from './note-links.mjs';
+import {getCleanup} from './cleanup.mjs';
 
 const buildDir = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'dist');
 const assetTypes = { '.js': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8', '.woff2': 'font/woff2', '.txt': 'text/plain; charset=utf-8' };
@@ -144,12 +145,21 @@ export function createServer(config, configId = null) {
       const historyRestore = req.method === 'POST' && url.pathname === '/api/note-history/restore';
       const capturePreview = req.method === 'POST' && url.pathname === '/api/capture-suggestions';
       const semanticReindex = req.method === 'POST' && url.pathname === '/api/embeddings/reindex';
-      if (!read && !save && !preview && !review && !management && !recovery && !historyRestore && !capturePreview && !semanticReindex) { res.setHeader('Allow', 'GET, HEAD, PUT, POST, DELETE'); return json(405, { error: 'Method not allowed' }); }
-      if (save || preview || review || management || recovery || historyRestore || capturePreview || semanticReindex) {
+      const semanticCleanup = req.method === 'POST' && url.pathname === '/api/cleanup';
+      if (!read && !save && !preview && !review && !management && !recovery && !historyRestore && !capturePreview && !semanticReindex && !semanticCleanup) { res.setHeader('Allow', 'GET, HEAD, PUT, POST, DELETE'); return json(405, { error: 'Method not allowed' }); }
+      if (save || preview || review || management || recovery || historyRestore || capturePreview || semanticReindex || semanticCleanup) {
         if (req.headers.origin !== `http://${host.toLowerCase()}` || req.headers['sec-fetch-site'] === 'cross-site') return json(403, { error: 'Editor requests must originate from this site.' });
         const token = req.headers['x-shared-brain-csrf'];
         if (typeof token !== 'string' || !/^[a-f0-9]{64}$/.test(token) || !timingSafeEqual(Buffer.from(token, 'hex'), csrf)) return json(403, { error: 'Editor session is missing or expired. Reload the editor session; your draft has not been saved.' });
         const body = await readJson(req);
+        if (semanticCleanup) {
+          if (!body || typeof body !== 'object' || Array.isArray(body) || (body.workspace !== undefined && typeof body.workspace !== 'string')) return json(400, {error: 'Workspace must be a string.'});
+          const controller = new AbortController();
+          res.once('close', () => controller.abort());
+          const result = await getCleanup(config, body.workspace ?? null, renderMarkdown, {semantic: true, signal: controller.signal});
+          if (!res.destroyed) return json(200, result);
+          return;
+        }
         if (semanticReindex) return json(200, await refreshEmbeddings(config));
         if (capturePreview) {
           if (typeof body.path !== 'string' || typeof body.content !== 'string' || Buffer.byteLength(body.content) > 2 * 1024 * 1024) return json(400, {error: 'Provide a Markdown path and content no larger than 2 MiB.'});
@@ -164,6 +174,16 @@ export function createServer(config, configId = null) {
         if (management) {
           if (url.pathname === '/api/trash/restore') return json(200, await restoreTrash(config, body.id));
           if (url.pathname === '/api/workspace') return json(200, req.method === 'PUT' ? await updateWorkspace(config, body) : await deleteWorkspace(config, body.id, body.expectedRevision));
+          if (body.cleanup === true) {
+            const fresh = config.configPath ? await loadConfig(config.configPath) : config;
+            if (fresh.vault !== config.vault || fresh.backupDir !== config.backupDir) return json(409, {error: 'Vault configuration changed. Restart and rescan before deciding.'});
+            const candidate = (await catalog(fresh)).find(note => note.path === body.path);
+            const workspace = candidate && (candidate.project === 'global' || fresh.projects.some(project => project.id === candidate.project) ? candidate.project : '__unmapped');
+            if (!candidate) return json(409, {error: 'This note is no longer a cleanup candidate. Rescan before deciding.'});
+            const scan = await getCleanup(fresh, workspace, renderMarkdown);
+            const eligible = scan.items.some(item => !item.reviewOnly && item.notes.some(note => note.path === body.path && note.revision === body.expectedRevision && !note.cleanupBlockedReason));
+            if (!eligible) return json(409, {error: 'This note is no longer an eligible cleanup candidate or has changed. Rescan before deciding.'});
+          }
           return json(200, await deleteNote(config, body.path, body.expectedRevision));
         }
         if (review) {
@@ -213,6 +233,7 @@ export function createServer(config, configId = null) {
       if (url.pathname === '/api/note-knowledge') return json(200, await getNoteKnowledge(config, url.searchParams.get('path')));
       if (url.pathname === '/api/workspace-overview') return json(200, await getWorkspaceOverview(config, url.searchParams.get('id')));
       if (url.pathname === '/api/memory-health') return json(200, await getMemoryHealth(config, renderMarkdown));
+      if (url.pathname === '/api/cleanup') return json(200, await getCleanup(config, url.searchParams.get('workspace'), renderMarkdown));
       if (url.pathname === '/api/embeddings') return json(200, await embeddingStatus(config));
       if (url.pathname === '/api/harnesses') return json(200, await getHarnessStatus(config));
       if (url.pathname === '/api/recovery') return json(200, await getRecoveryStatus(config));

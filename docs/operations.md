@@ -46,6 +46,8 @@ The private `.state/embeddings.sqlite` cache stores hashes, model/format fingerp
 
 New inference refreshes the model's two-minute idle keep-alive. Cached-only searches do not wake it. Other Ollama clients can retain the same model longer, and memory pressure may cause earlier unloading. Cold loads are expected. Axiom never kills another model or automatically starts/repairs Ollama; if unavailable, lexical search remains available with explicit semantic status. Only loopback HTTP origins and pinned local model identities are accepted; known remote/cloud proxies and redirects are rejected.
 
+The human **Clean up** scan also uses this pinned model/cache when **Include semantic comparison** is checked. Its protected `POST /api/cleanup` may embed missing document chunks; ordinary `GET /api/cleanup` remains lexical and does not infer. Complete cleanup vectors can be compared offline without engine requests; that cached result is not a claim that the provider is healthy. Inference failure preserves lexical candidates, and partial semantic coverage is explicit. Cleanup never starts Ollama itself. Ensure the model alias exists in the store used by the running service; a retained GGUF or an alias created in a different temporary model store is not sufficient. Use the guarded setup command with the intended endpoint and verified model artifact rather than deleting or replacing other models.
+
 Disable semantic retrieval while preserving the model/cache:
 
 ```powershell

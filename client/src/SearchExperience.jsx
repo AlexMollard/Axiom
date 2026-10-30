@@ -68,7 +68,7 @@ export function SearchResults({ query, groups, filters, onFiltersChange }) {
 
 const actions = [
   { title: 'New note', url: '/?edit=1' }, { title: 'Review queue', url: '/?view=review' },
-  { title: 'Memory health', url: '/?view=health' }, { title: 'Harnesses', url: '/?view=harnesses' },
+  { title: 'Memory health', url: '/?view=health' }, { title: 'Clean up', url: '/?view=cleanup' }, { title: 'Harnesses', url: '/?view=harnesses' },
   { title: 'Recovery', url: '/?view=recovery' }, { title: 'Usage', url: '/?view=usage' },
   { title: 'Workspaces', url: '/?view=projects' }, { title: 'Trash', url: '/?view=trash' },
 ];

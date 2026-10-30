@@ -19,8 +19,8 @@ Axiom brings personal notes, project decisions and coding-agent memory into one 
 | **Connections you can explore** | Follow backlinks and workspace knowledge graphs. Pan, zoom, search and inspect a note's connections. |
 | **A review workflow for agent memory** | See new and changed findings, compare revisions, and review the exact content you checked. Later edits invalidate that approval. |
 | **Context across connected tools** | Use native Claude Code and omp integrations, the guarded MCP server for explicitly configured clients, or the CLI. |
-| **Evidence, not imaginary certainty** | Inspect recorded memory deliveries, provenance and cleanup candidates. Quiet history is not proof that a note is disposable. |
-| **Find the useful passage** | Full-text ranking supports short technical terms and section links. Add [local GPU semantic retrieval](docs/getting-started.md#optional-local-semantic-retrieval) for paraphrases, related notes and duplicate-capture suggestions, without changing note authority. |
+| **Evidence, not imaginary certainty** | Inspect recorded memory deliveries and provenance, or [review cleanup candidates](docs/agent-memory.md#clean-up-notes) with source previews, approve/reject decisions and a copyable agent merge brief. Eligible removals use recoverable Trash; quiet history alone never establishes disposability. |
+| **Find the useful passage** | Full-text ranking supports short technical terms and section links. Add [local GPU embeddings](docs/getting-started.md#optional-local-semantic-retrieval) for paraphrases, related notes, duplicate-capture suggestions and semantic cleanup hints, without changing note authority. |
 
 ## You own the rules
 

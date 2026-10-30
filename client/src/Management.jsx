@@ -20,11 +20,11 @@ function Dialog({ title, onClose, children }) {
   useEffect(() => { const dialog = ref.current; dialog.showModal(); return () => { if (dialog.open) dialog.close(); }; }, []);
   return <dialog ref={ref} className="management-dialog" aria-labelledby="management-title" onCancel={e => { e.preventDefault(); onClose(); }}><div className="management-dialog-inner"><h2 id="management-title">{title}</h2>{children}</div></dialog>;
 }
-export function DeleteNote({ note, onClose, onDeleted }) {
+export function DeleteNote({ note, onClose, onDeleted, cleanup = false }) {
   const [busy, setBusy] = useState(false), [error, setError] = useState('');
   async function remove() {
     setBusy(true); setError('');
-    try { await mutate('/api/note', 'DELETE', { path: note.path, expectedRevision: note.revision }); onDeleted(); }
+    try { await mutate('/api/note', 'DELETE', { path: note.path, expectedRevision: note.revision, ...(cleanup ? {cleanup: true} : {}) }); onDeleted(); }
     catch (e) { setError(e.message); setBusy(false); }
   }
   return <Dialog title="Move note to Trash?" onClose={onClose}><p>Move <strong>{note.title}</strong> ({note.path}) to Trash? You can restore it later.</p>{error && <p className="management-error" role="alert">{error}</p>}<div className="management-actions"><button className="button" onClick={onClose} disabled={busy}>Cancel</button><button className="button danger-button" onClick={remove} disabled={busy}>{busy ? 'Moving…' : 'Move to Trash'}</button></div></Dialog>;

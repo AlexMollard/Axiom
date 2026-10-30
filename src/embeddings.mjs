@@ -119,7 +119,7 @@ function boundedText(text, bytes) {
   for (const char of text) { const n = Buffer.byteLength(char); if (size + n > bytes) break; result += char; size += n; }
   return result;
 }
-function chunksFor(entry, budget) {
+function chunksFor(entry, budget, contentOnly = false) {
   const content = String(entry.content || '');
   const body = content.replace(/^---\r?\n[\s\S]*?\r?\n---(?:\r?\n|$)/, match => match.replace(/[^\r\n]/g, ' '));
   const lines = body.match(/[^\r\n]*(?:\r\n|\r|\n|$)/g).filter(Boolean), tokens = markdown.parse(body, {}), headings = new Map(), used = new Map();
@@ -135,8 +135,10 @@ function chunksFor(entry, budget) {
   const flush = () => {
     const trimmed = current.trim();
     if (!trimmed) { current = ''; return; }
-    if (chunks.length >= budget) { incomplete = true; current = ''; return; }
     const start = currentStart + (current.length - current.trimStart().length);
+    // A bare heading is useful search evidence, but not evidence that two notes overlap.
+    if (contentOnly && headingRange && start < headingRange.end && !current.slice(Math.max(0, headingRange.end - currentStart)).trim()) { current = ''; return; }
+    if (chunks.length >= budget) { incomplete = true; current = ''; return; }
     const title = boundedText(String(entry.note.title || '').trim(), 160);
     const section = boundedText(heading.trim(), 160);
     const prefix = [title, ...(section && section.toLocaleLowerCase() !== title.toLocaleLowerCase() ? [section] : [])].filter(Boolean).join('\n');
@@ -272,4 +274,124 @@ export async function semanticSearch(config, entries, query, {limit = 100, timeo
       return {matches: [...best.values()].sort((a, b) => b.similarity - a.similarity || a.path.localeCompare(b.path)).slice(0, max), status};
     });
   } catch (error) { return {matches: [], status: fail(config, error)}; } finally { db?.close(); }
+}
+
+// Bound cleanup independently of retrieval: one large note or workspace must not
+// consume all available comparison work. Similarity is not merge confidence.
+const PAIR_NOTES = 2000, PAIR_INPUTS = 20000, PAIR_CHUNKS_PER_NOTE = 16, PAIR_COMPARISONS = 200000, PAIR_RESULTS = 200;
+export async function semanticPairs(config, entries, {signal, timeoutMs = 120000, warmOnly = false, minSimilarity = 0.65, limit = 200} = {}) {
+  let db;
+  const status = {enabled: Boolean(config?.embeddings?.enabled), state: 'unavailable', model: config?.embeddings?.model || null,
+    cacheHits: 0, embeddedChunks: 0, comparedPairs: 0, possiblePairs: 0, incomplete: false};
+  try {
+    const settings = embeddingSettings(config);
+    if (!settings.enabled) return {pairs: [], status: {...status, enabled: false, state: 'disabled', model: null}};
+    settings.signal = signal; status.model = settings.model;
+    const deadline = Date.now() + Math.max(1, Math.min(Number.isFinite(timeoutMs) ? timeoutMs : 120000, 120000));
+    const checkpoint = async () => {
+      await new Promise(resolve => setImmediate(resolve));
+      if (signal?.aborted) throw new Error('Semantic comparison was cancelled.');
+      if (Date.now() >= deadline) throw new Error('Semantic comparison timed out.');
+    };
+    const key = `${cachePath(config)}\n${settings.endpoint}\n${settings.fingerprint}`;
+    return await serialized(key, deadline, signal, async () => {
+      db = await openCache(config);
+      const groups = new Map(); let inputCount = 0, inputTruncated = false;
+      for (const entry of entries) {
+        if (inputCount++ >= PAIR_INPUTS) { inputTruncated = true; break; }
+        const project = String(entry.note.project || '');
+        if (!groups.has(project)) groups.set(project, []);
+        groups.get(project).push(entry);
+        if (inputCount % 128 === 0) await checkpoint();
+      }
+      const queues = [...groups.entries()].filter(([, group]) => group.length > 1).sort(([a], [b]) => a.localeCompare(b)).map(([project, group]) => ({
+        project, entries: group.sort((a, b) => a.note.path.localeCompare(b.note.path)), docs: [], next: 0
+      }));
+      let bytes = 0, chunks = 0, admitted = 0, skipped = inputTruncated, skippedNotes = 0, truncatedNotes = 0, emptyPairs = 0;
+      const unique = new Map();
+      while (queues.some(group => group.next < group.entries.length)) {
+        for (const group of queues) {
+          if (group.next >= group.entries.length) continue;
+          const entry = group.entries[group.next++];
+          const size = Buffer.byteLength(String(entry.content || ''));
+          if (admitted >= PAIR_NOTES || bytes + size > MAX_CORPUS_BYTES || chunks >= MAX_CHUNKS) { skipped = true; skippedNotes++; continue; }
+          bytes += size; admitted++;
+          const parsed = chunksFor(entry, Math.min(PAIR_CHUNKS_PER_NOTE, MAX_CHUNKS - chunks), true);
+          if (parsed.incomplete) { skipped = true; truncatedNotes++; }
+          chunks += parsed.chunks.length;
+          for (const chunk of parsed.chunks) if (!unique.has(chunk.key)) unique.set(chunk.key, chunk);
+          group.docs.push({note: entry.note, chunks: parsed.chunks});
+          if (admitted % 32 === 0) await checkpoint();
+        }
+      }
+      const vectors = new Map(), missing = [];
+      for (const chunk of unique.values()) {
+        const vector = loadVector(db, settings, chunk.key);
+        if (vector) { vectors.set(chunk.key, vector); status.cacheHits++; } else missing.push(chunk);
+        if ((status.cacheHits + missing.length) % 128 === 0) await checkpoint();
+      }
+      if (warmOnly && missing.length) skipped = true;
+      if (!warmOnly) for (let i = 0; i < missing.length; i += BATCH) {
+        await checkpoint();
+        const batch = missing.slice(i, i + BATCH);
+        const result = await embed(settings, batch.map(chunk => chunk.text), deadline, false);
+        if (signal?.aborted) throw new Error('Semantic comparison was cancelled.');
+        const records = batch.map((chunk, index) => [chunk.key, result[index]]);
+        storeVectors(db, settings, records);
+        for (const [chunkKey, vector] of records) vectors.set(chunkKey, vector);
+        status.embeddedChunks += records.length;
+      }
+      status.indexedChunks = count(db, settings);
+      for (const group of queues) status.possiblePairs += group.docs.length * (group.docs.length - 1) / 2;
+      const threshold = Number.isFinite(minSimilarity) ? Math.max(-1, Math.min(1, minSimilarity)) : 0.65;
+      const max = Number.isFinite(limit) ? Math.max(0, Math.min(PAIR_RESULTS, Math.floor(limit))) : PAIR_RESULTS;
+      const pairs = []; let comparisons = 0, operations = 0, exhausted = false, truncated = false;
+      const compare = (a, b) => b.similarity - a.similarity || a.left.path.localeCompare(b.left.path) || a.right.path.localeCompare(b.right.path);
+      // Interleave workspaces and pair distances, rather than exhausting the first workspace.
+      for (let distance = 1; !exhausted && queues.some(group => distance < group.docs.length); distance++) {
+        for (let start = 0; !exhausted && queues.some(group => start + distance < group.docs.length); start++) {
+          for (const group of queues) {
+            if (start + distance >= group.docs.length) continue;
+            const a = group.docs[start], b = group.docs[start + distance];
+            let best = -Infinity, bestChunks = null, complete = true;
+            for (const x of a.chunks) {
+              const vx = vectors.get(x.key); if (!vx) { complete = false; continue; }
+              for (const y of b.chunks) {
+                const vy = vectors.get(y.key); if (!vy) { complete = false; continue; }
+                if (comparisons >= PAIR_COMPARISONS) { exhausted = true; complete = false; break; }
+                let score = 0; for (let i = 0; i < vx.length; i++) score += vx[i] * vy[i];
+                comparisons++; if (score > best) { best = score; bestChunks = [x, y]; }
+              }
+              if (exhausted) break;
+            }
+            if (complete && a.chunks.length && b.chunks.length) status.comparedPairs++;
+            else if (!a.chunks.length || !b.chunks.length) { skipped = true; emptyPairs++; }
+            if (best >= threshold) {
+              if (max) {
+                pairs.push({left: {path: a.note.path, revision: a.note.revision}, right: {path: b.note.path, revision: b.note.revision}, similarity: Math.max(-1, Math.min(1, best)),
+                  passages: bestChunks.map((chunk, index) => ({path: index ? b.note.path : a.note.path, heading: chunk.heading.slice(0, 160), excerpt: chunk.excerpt}))});
+                pairs.sort(compare); if (pairs.length > max) { pairs.pop(); truncated = true; }
+              } else truncated = true;
+            }
+            if (++operations % 128 === 0) await checkpoint();
+            if (exhausted) break;
+          }
+        }
+      }
+      await checkpoint();
+      status.incomplete = skipped || exhausted || truncated;
+      status.state = status.incomplete ? 'incomplete' : 'ready';
+      const reasons = [];
+      if (warmOnly && missing.length) reasons.push('Cached document vectors are missing; cached-only comparison does not perform inference.');
+      if (inputTruncated || skippedNotes) reasons.push('The input-note or corpus-size limit excluded some notes.');
+      if (truncatedNotes) reasons.push(`${truncatedNotes} notes exceeded ${PAIR_CHUNKS_PER_NOTE} content chunks; later content was not compared.`);
+      if (emptyPairs) reasons.push('Some pairs had no substantive document content.');
+      if (exhausted) reasons.push('The chunk-comparison budget was reached.');
+      if (truncated) reasons.push(`Only the top ${max} matching pairs are returned.`);
+      if (reasons.length) status.reason = reasons.join(' ');
+      return {pairs, status};
+    });
+  } catch (error) {
+    return {pairs: [], status: {...status, state: 'unavailable', incomplete: true, reason: `Semantic comparison unavailable: ${error.message}`}};
+  } finally { db?.close(); }
 }
