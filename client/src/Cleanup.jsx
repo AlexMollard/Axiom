@@ -3,6 +3,7 @@ import { ScanSearch, Trash2 } from 'lucide-react';
 import { DeleteNote } from './Management.jsx';
 import { decisionKey, readDecisions, writeDecisions, buildHandoff } from './cleanup-review.mjs';
 import CleanupReview from './CleanupReview.jsx';
+import CleanupAnalysis from './CleanupAnalysis.jsx';
 import './Cleanup.css';
 
 const categories = [['all', 'All'], ['duplicate', 'Duplicates'], ['merge', 'Merge suggestions'], ['empty', 'Empty'], ['stale', 'Stale']];
@@ -124,6 +125,7 @@ export default function Cleanup({ groups, vaultId, onCatalogChanged }) {
       </div>
       <p className="cleanup-meta">The handoff contains private paths and evidence. Share it only with a trusted agent. It does not execute changes.</p>
       {handoff && <div className="cleanup-handoff"><label htmlFor="cleanup-handoff-json">Handoff JSON (select and copy if needed)</label><textarea id="cleanup-handoff-json" readOnly value={handoff} onFocus={e => e.target.select()} /><a className="button" download="cleanup-handoff.json" href={'data:application/json;charset=utf-8,' + encodeURIComponent(handoff)}>Download JSON</a><p role="status">{copyStatus}</p></div>}
+      <CleanupAnalysis vaultId={vaultId} workspace={workspace} items={items} decisions={decisions} scan={result} scanning={busy} />
       <p className="cleanup-meta" role="status">Scanned {result.scannedNotes.toLocaleString()} notes · {new Date(result.scannedAt).toLocaleString()}</p>
       {result.semantic && !semanticError && phase !== 'semantic' && <p className="cleanup-meta" role="status">{semanticSummary(result.semantic)}{result.semantic.state !== 'not-requested' && (result.semantic.incomplete || result.semantic.state === 'incomplete' || result.semantic.state === 'unavailable' || result.semantic.state === 'error') ? ' Lexical results remain available.' : ''}</p>}
       {result.coverage?.insufficientHistoryNotes > 0 && <p className="cleanup-meta">{result.coverage.insufficientHistoryNotes.toLocaleString()} notes lack enough observed usage history for stale classification. Tracking started {result.coverage.trackingHistoryDays ?? 'an unknown number of'} {result.coverage.trackingHistoryDays === 1 ? 'day' : 'days'} ago; stale checks require {result.coverage.usageTracking.staleDays} days per note.</p>}

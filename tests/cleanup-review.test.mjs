@@ -1,6 +1,6 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
-import {decisionKey, readDecisions, writeDecisions, buildHandoff} from '../client/src/cleanup-review.mjs';
+import {decisionKey, readDecisions, writeDecisions, buildHandoff, buildAnalysisPack} from '../client/src/cleanup-review.mjs';
 
 const item = (revision = 'rev-a', category = 'merge') => ({id: 'pair', category, reason: 'Possible overlap', recommendation: 'Compare sources', notes: [
   {path: 'Agents/a.md', revision, owner: 'agent', project: 'alpha', content: 'SECRET FULL CONTENT'},
@@ -73,4 +73,57 @@ test('approved agent-only pairs can merge but control-note and owner paths remai
   const result = report(items, Object.fromEntries(items.map(entry => [decisionKey(entry), decision()])));
   assert.deepEqual(result.items.map(entry => entry.execution), ['agent-merge', 'human-proposal', 'human-proposal']);
   assert.deepEqual(result.items.map(entry => entry.actionable), [true, false, false]);
+});
+
+test('analysis pack includes all decisions and deduplicated full source bytes without granting execution', async () => {
+  const first = item(), thirdSource = {path: 'Agents/c.md', revision: 'rev-c', owner: 'agent', project: 'alpha'};
+  const second = {...item(), id: 'second', notes: [first.notes[1], thirdSource]};
+  const third = {...item(), id: 'third', notes: [first.notes[0], thirdSource]};
+  const originals = [first.notes[0], first.notes[1], thirdSource].map((note, index) => ({...note, content: `# Full source ${index}\r\n\r\nUnique detail absent from the short matching passage.\r\n`}));
+  const reads = [], progress = [];
+  const result = await buildAnalysisPack({vaultId: 'v', workspace: 'alpha', items: [first, second, third],
+    decisions: {[decisionKey(first)]: decision('approved'), [decisionKey(second)]: decision('rejected')},
+    scan: {semantic: {incomplete: true}}, generatedAt: '2026-10-30T00:00:00Z',
+    readSource: async path => { reads.push(path); return originals.find(note => note.path === path); },
+    onProgress: value => progress.push(value)});
+  const pack = JSON.parse(result.json);
+  assert.deepEqual(reads, originals.map(note => note.path));
+  assert.deepEqual(pack.sources.map(note => note.content), originals.map(note => note.content));
+  assert.deepEqual(pack.suggestions.map(suggestion => suggestion.decision), ['approved', 'rejected', 'undecided']);
+  assert(pack.suggestions.every(suggestion => !suggestion.actionable && suggestion.execution === 'analysis-only'));
+  assert.equal(pack.purpose, 'analysis-only');
+  assert.equal(pack.scan.semantic.incomplete, true);
+  assert.equal(pack.suggestions[0].instructions, 'Compare carefully');
+  assert.deepEqual(progress.at(-1), {loaded: 3, total: 3});
+  assert.equal(result.sourceCount, 3);
+  assert.equal(result.suggestionCount, 3);
+  assert.equal(result.bytes, new TextEncoder().encode(result.json).byteLength);
+  assert(!/(?<!\r)\n/.test(result.json));
+});
+
+test('analysis export rejects changed, missing, mismatched and internally conflicting sources', async () => {
+  const candidate = item();
+  const args = {vaultId: 'v', items: [candidate], decisions: {}};
+  for (const replacement of [undefined, {...candidate.notes[0], revision: 'changed', content: 'body'}, {...candidate.notes[0], path: 'wrong.md', content: 'body'}]) {
+    await assert.rejects(buildAnalysisPack({...args, readSource: async () => replacement}), /Source changed or is unavailable/);
+  }
+  let reads = 0;
+  await assert.rejects(buildAnalysisPack({...args, items: [candidate, item('changed')], readSource: async () => { reads++; }}), /conflicting revisions/);
+  assert.equal(reads, 0);
+});
+
+test('cancelled analysis loading stops without returning a partial pack or reading later sources', async () => {
+  const controller = new AbortController(), candidate = item();
+  let reads = 0;
+  await assert.rejects(buildAnalysisPack({vaultId: 'v', items: [candidate], decisions: {}, signal: controller.signal,
+    readSource: async () => { reads++; controller.abort(); return {...candidate.notes[0], content: 'body'}; }}), {name: 'AbortError'});
+  assert.equal(reads, 1);
+});
+
+test('analysis export fails rather than truncating UTF-8 content or oversized JSON metadata', async () => {
+  const candidate = item(), args = {vaultId: 'v', items: [candidate], decisions: {}};
+  await assert.rejects(buildAnalysisPack({...args, maxBytes: 500, readSource: async () => ({...candidate.notes[0], content: '漢'.repeat(200)})}), /size limit/);
+  let reads = 0;
+  await assert.rejects(buildAnalysisPack({...args, maxBytes: 1000, readSource: async path => { reads++; return {...candidate.notes.find(note => note.path === path), content: 'body'}; }}), /complete JSON pack exceeds/);
+  assert.equal(reads, 2);
 });
