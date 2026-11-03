@@ -6,7 +6,7 @@ Run, protect and recover an Axiom installation on Windows.
 
 ## Windows startup and supervision
 
-`./scripts/start.ps1 -Register -Open` registers two least-privilege scheduled tasks for the signed-in interactive user: a sign-in task and a short-lived health task every three minutes. They require neither administrator rights nor a stored password and do not wake the PC. The sign-in task runs a hidden one-shot launcher that starts hidden Node and exits. Node is the only persistent application process; there is no persistent PowerShell supervisor.
+`./scripts/start.ps1 -Register -Open` registers two least-privilege scheduled tasks for the signed-in interactive user: a sign-in task and a short-lived health task every three minutes. They require neither administrator rights nor a stored password and do not wake the PC. Both tasks use `conhost.exe --headless` to prevent console flashes and focus theft; PowerShell's `-WindowStyle Hidden` alone hides the console only after it appears. The sign-in task runs a hidden one-shot launcher that starts hidden Node and exits. Node is the only persistent application process; there is no persistent PowerShell supervisor. Registering again migrates verified tasks from the previous direct PowerShell launcher.
 
 The launch task has no execution-time limit, ignores overlapping starts and requests three one-minute retries for task or action launch failures. Do not rely on those native retries to restart an exited process: native qualification did not restart either a killed process or an ordinary nonzero exit. The health task performs process recovery explicitly.
 

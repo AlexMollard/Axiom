@@ -57,13 +57,20 @@ if ($Health) {
   } catch { }
 }
 $pwsh = (Get-Command pwsh -ErrorAction Stop).Source
+# Start a headless console before PowerShell; -WindowStyle Hidden alone flashes
+# a window and can activate Windows Terminal before PowerShell parses its flags.
+$taskHost = Join-Path $env:SystemRoot 'System32/conhost.exe'
+$taskPrefix = '--headless "' + $pwsh + '" '
 # Runtime arguments are fixed before entering the one-shot launcher.
 $user = [Security.Principal.WindowsIdentity]::GetCurrent().Name
 $userSid = [Security.Principal.WindowsIdentity]::GetCurrent().User.Value
 function OwnedTask($name, $expectedExecutable, $expectedArgument, [switch]$AllowLegacy) {
   $task = Get-ScheduledTask -TaskName $name -ErrorAction SilentlyContinue
   if (-not $task) { return $null }
-  $legacyAction = $AllowLegacy -and $name -eq $taskName -and $task.Actions[0].Execute -ieq $node -and $task.Actions[0].Arguments -ceq $serverArgument
+  $legacyArgument = if ($expectedArgument.StartsWith($taskPrefix, [StringComparison]::Ordinal)) { $expectedArgument.Substring($taskPrefix.Length) } else { $null }
+  $legacyAction = $AllowLegacy -and (
+    ($name -eq $taskName -and $task.Actions[0].Execute -ieq $node -and $task.Actions[0].Arguments -ceq $serverArgument) -or
+    ($legacyArgument -and $task.Actions[0].Execute -ieq $pwsh -and $task.Actions[0].Arguments -ceq $legacyArgument))
   if (@($task.Actions).Count -ne 1 -or (($task.Actions[0].Execute -ine $expectedExecutable -or $task.Actions[0].Arguments -cne $expectedArgument) -and -not $legacyAction)) {
     throw "Scheduled task $name is not owned by this Axiom installation."
   }
@@ -79,10 +86,10 @@ function OwnedTask($name, $expectedExecutable, $expectedArgument, [switch]$Allow
   if ($name -eq $taskName -and ($s.ExecutionTimeLimit -ne 'PT0S' -or $s.RestartOnFailure.Count -ne '3' -or $s.RestartOnFailure.Interval -ne 'PT1M')) { throw "Task $name has unexpected restart settings." }
   return $task
 }
-$launchArgument = '-NoProfile -NonInteractive -WindowStyle Hidden -File "' + $script + '" -TaskLaunch -ConfigPath ' + $quotedConfig
-$healthArgument = '-NoProfile -NonInteractive -WindowStyle Hidden -File "' + $script + '" -Health -ConfigPath ' + $quotedConfig
-$serverTask = OwnedTask $taskName $pwsh $launchArgument -AllowLegacy:$Register
-$healthTask = OwnedTask $healthName $pwsh $healthArgument
+$launchArgument = $taskPrefix + '-NoProfile -NonInteractive -WindowStyle Hidden -File "' + $script + '" -TaskLaunch -ConfigPath ' + $quotedConfig
+$healthArgument = $taskPrefix + '-NoProfile -NonInteractive -WindowStyle Hidden -File "' + $script + '" -Health -ConfigPath ' + $quotedConfig
+$serverTask = OwnedTask $taskName $taskHost $launchArgument -AllowLegacy:$Register
+$healthTask = OwnedTask $healthName $taskHost $healthArgument -AllowLegacy:$Register
 if ($Unregister) {
   foreach ($name in @($healthName, $taskName)) {
     if ($name -eq $taskName) { $existing = $serverTask } else { $existing = $healthTask }
@@ -97,15 +104,15 @@ if ($Register) {
   # Use the current interactive account without elevation.
   $principal = New-ScheduledTaskPrincipal -UserId $user -LogonType Interactive -RunLevel Limited
   $settings = New-ScheduledTaskSettingsSet -MultipleInstances IgnoreNew -ExecutionTimeLimit ([TimeSpan]::Zero) -RestartCount 3 -RestartInterval (New-TimeSpan -Minutes 1) -Priority 5 -StartWhenAvailable -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries
-  $action = New-ScheduledTaskAction -Execute $pwsh -Argument $launchArgument -WorkingDirectory $root
+  $action = New-ScheduledTaskAction -Execute $taskHost -Argument $launchArgument -WorkingDirectory $root
   $trigger = New-ScheduledTaskTrigger -AtLogOn -User $user
   Register-ScheduledTask -TaskName $taskName -Action $action -Trigger $trigger -Settings $settings -Principal $principal -Force | Out-Null
   $healthSettings = New-ScheduledTaskSettingsSet -MultipleInstances IgnoreNew -ExecutionTimeLimit (New-TimeSpan -Minutes 1) -StartWhenAvailable -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries
-  $healthAction = New-ScheduledTaskAction -Execute $pwsh -Argument $healthArgument -WorkingDirectory $root
+  $healthAction = New-ScheduledTaskAction -Execute $taskHost -Argument $healthArgument -WorkingDirectory $root
   $healthTrigger = New-ScheduledTaskTrigger -Once -At ([DateTime]::Now.AddMinutes(3)) -RepetitionInterval (New-TimeSpan -Minutes 3)
   Register-ScheduledTask -TaskName $healthName -Action $healthAction -Trigger $healthTrigger -Settings $healthSettings -Principal $principal -Force | Out-Null
-  $serverTask = OwnedTask $taskName $pwsh $launchArgument
-  $healthTask = OwnedTask $healthName $pwsh $healthArgument
+  $serverTask = OwnedTask $taskName $taskHost $launchArgument
+  $healthTask = OwnedTask $healthName $taskHost $healthArgument
   if (-not $serverTask -or -not $healthTask) { throw 'Scheduled task registration could not be verified.' }
   # Only remove our old launcher, and only for the default installation.
   $defaultConfig = [IO.Path]::GetFullPath((Join-Path $env:LOCALAPPDATA 'Axiom/config.json'))
@@ -140,13 +147,13 @@ function Ready {
   try { return (Invoke-RestMethod -Uri "$url/health" -TimeoutSec 2 -NoProxy).ok -eq $true } catch { return $false }
 }
 function StopOwnedTask {
-  $task = OwnedTask $taskName $pwsh $launchArgument
+  $task = OwnedTask $taskName $taskHost $launchArgument
   if (-not $task -or $task.State -ne 'Running') { return }
   Stop-ScheduledTask -TaskName $taskName
   $deadline = [DateTime]::UtcNow.AddSeconds(15)
   do {
     Start-Sleep -Milliseconds 200
-    $task = OwnedTask $taskName $pwsh $launchArgument
+    $task = OwnedTask $taskName $taskHost $launchArgument
   } while ($task -and $task.State -eq 'Running' -and [DateTime]::UtcNow -lt $deadline)
   if (-not $task -or $task.State -eq 'Running') { throw 'Scheduled server task did not stop.' }
 }
@@ -199,7 +206,7 @@ if ($Health) {
   if (Listener) { throw 'Listener appeared during health check.' }
   StopOwnedTask
   if (Listener) { throw 'Listener appeared while stopping the scheduled task.' }
-  if (-not (OwnedTask $taskName $pwsh $launchArgument)) { throw 'Scheduled server task disappeared.' }
+  if (-not (OwnedTask $taskName $taskHost $launchArgument)) { throw 'Scheduled server task disappeared.' }
   Start-ScheduledTask -TaskName $taskName
   return
 }

@@ -7,6 +7,7 @@ $launcher = Join-Path $PSScriptRoot 'start.ps1'
 $server = Join-Path $repo 'src/server.mjs'
 $node = (Get-Command node -ErrorAction Stop).Source
 $pwsh = (Get-Command pwsh -ErrorAction Stop).Source
+$taskHost = Join-Path $env:SystemRoot 'System32/conhost.exe'
 if (-not $EvidenceDir) {
   $privateConfig = if ($env:SHARED_BRAIN_CONFIG) { $env:SHARED_BRAIN_CONFIG } else { Join-Path $env:LOCALAPPDATA 'Axiom/config.json' }
   $EvidenceDir = Join-Path (Join-Path (Split-Path -Parent ([IO.Path]::GetFullPath($privateConfig))) '.state') ('qualification-' + [DateTime]::UtcNow.ToString('yyyyMMddTHHmmssfffZ') + '-' + [guid]::NewGuid().ToString('N').Substring(0, 8))
@@ -35,8 +36,8 @@ function Launcher([string[]]$Extra, [switch]$Failure) {
 function FixtureTask($name, $mode) {
   $task = Get-ScheduledTask -TaskName $name -ErrorAction SilentlyContinue
   if (-not $task) { return $null }
-  $expected = '-NoProfile -NonInteractive -WindowStyle Hidden -File "' + $launcher + '" ' + $mode + ' -ConfigPath "' + $configPath + '"'
-  if (@($task.Actions).Count -ne 1 -or $task.Actions[0].Execute -ine $pwsh -or $task.Actions[0].Arguments -cne $expected) { throw "Refusing to manage foreign task $name." }
+  $expected = '--headless "' + $pwsh + '" -NoProfile -NonInteractive -WindowStyle Hidden -File "' + $launcher + '" ' + $mode + ' -ConfigPath "' + $configPath + '"'
+  if (@($task.Actions).Count -ne 1 -or $task.Actions[0].Execute -ine $taskHost -or $task.Actions[0].Arguments -cne $expected) { throw "Refusing to manage foreign task $name." }
   return $task
 }
 function FixtureProcess {
