@@ -15,9 +15,11 @@ if (event === 'PreToolUse' && !['Write', 'Edit', 'MultiEdit', 'NotebookEdit', 'B
 try {
   const config = await loadConfig();
   if (event === 'SessionStart' || event === 'UserPromptSubmit' || event === 'SubagentStart') {
-    const context = await policies(config, cwd, event === 'UserPromptSubmit' ? (input.prompt || '') : '', {source: 'claude', maxBytes: 8192});
+    // SessionStart (incl. compact) and SubagentStart carry the owner block; prompts add only matching references.
+    const prompt = event === 'UserPromptSubmit';
+    const context = await policies(config, cwd, prompt ? (input.prompt || '') : '', {source: 'claude', maxBytes: 8192, referencesOnly: prompt});
     await observeHarness(config, 'claude', event);
-    process.stdout.write(JSON.stringify({ hookSpecificOutput: { hookEventName: event, additionalContext: context } }));
+    if (context) process.stdout.write(JSON.stringify({ hookSpecificOutput: { hookEventName: event, additionalContext: context } }));
   } else if (event === 'PreToolUse') {
     const name = input.tool_name || '';
     const args = input.tool_input || {};
