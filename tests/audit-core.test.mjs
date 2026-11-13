@@ -53,6 +53,17 @@ test('policy budget includes mandatory footer and records only delivered fresh m
   assert.equal(after.notes.find(n => n.path === 'Owner/Policies.md').usage.context30d, 2);
 });
 
+test('referencesOnly prompt context omits the owner block and is empty without matches', async t => {
+  const {config} = await fixture(t);
+  await put(config, 'Agents/Memory/Ref.md', '# Ref\nrefprobe matching evidence');
+  const prompt = await policies(config, process.cwd(), 'refprobe', {source: 'claude', referencesOnly: true});
+  assert.match(prompt, /REFERENCE Agents\/Memory\/Ref\.md[\s\S]*refprobe matching evidence/);
+  assert.doesNotMatch(prompt, /SOURCE Owner\//);
+  assert.equal(await policies(config, process.cwd(), 'zzznomatchzzz', {source: 'claude', referencesOnly: true}), '');
+  const usages = await getNoteUsage(config, await catalog(config));
+  assert.equal(usages.notes.find(n => n.path === 'Owner/Policies.md').usage.context30d, 0);
+});
+
 test('Unicode case expansion before a match does not displace search or context evidence', async t => {
   const {config} = await fixture(t);
   const content = '# Unicode\n' + 'İ'.repeat(1000) + '\nneedleunicode actual evidence';
