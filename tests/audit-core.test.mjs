@@ -53,15 +53,20 @@ test('policy budget includes mandatory footer and records only delivered fresh m
   assert.equal(after.notes.find(n => n.path === 'Owner/Policies.md').usage.context30d, 2);
 });
 
-test('referencesOnly prompt context omits the owner block and is empty without matches', async t => {
-  const {config} = await fixture(t);
-  await put(config, 'Agents/Memory/Ref.md', '# Ref\nrefprobe matching evidence');
-  const prompt = await policies(config, process.cwd(), 'refprobe', {source: 'claude', referencesOnly: true});
+test('referencesOnly prompt context omits the owner block, keeps only current-project notes and is empty without matches', async t => {
+  const {root, config} = await fixture(t);
+  config.projects = [{id: 'alpha', root}];
+  await put(config, 'Agents/Memory/Ref.md', '---\nproject: alpha\n---\n# Ref\nrefprobe matching evidence');
+  await put(config, 'Agents/Memory/Global.md', '---\nproject: global\n---\n# Global\nrefprobe global evidence');
+  await put(config, 'Agents/Memory/Weak.md', '---\nproject: alpha\n---\n# Weak\nrefprobe alone');
+  const prompt = await policies(config, root, 'refprobe matching evidence', {source: 'claude', referencesOnly: true});
   assert.match(prompt, /REFERENCE Agents\/Memory\/Ref\.md[\s\S]*refprobe matching evidence/);
-  assert.doesNotMatch(prompt, /SOURCE Owner\//);
-  assert.equal(await policies(config, process.cwd(), 'zzznomatchzzz', {source: 'claude', referencesOnly: true}), '');
+  assert.doesNotMatch(prompt, /Global\.md|Weak\.md|SOURCE Owner\//);
+  assert.equal(await policies(config, root, 'refprobe', {source: 'claude', referencesOnly: true}), '');
+  assert.equal(await policies(config, root, 'zzznomatchzzz', {source: 'claude', referencesOnly: true}), '');
   const usages = await getNoteUsage(config, await catalog(config));
   assert.equal(usages.notes.find(n => n.path === 'Owner/Policies.md').usage.context30d, 0);
+  assert.match(await policies(config, root, 'refprobe', {source: 'claude'}), /Global\.md/);
 });
 
 test('Unicode case expansion before a match does not displace search or context evidence', async t => {

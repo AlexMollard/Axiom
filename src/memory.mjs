@@ -294,13 +294,21 @@ export async function policies(config, cwd = process.cwd(), query = '', usage = 
   if (!Number.isSafeInteger(maxBytes) || maxBytes < 0) throw new Error('Policy context byte budget must be a non-negative integer.');
   if (Buffer.byteLength([...parts, footer].join('\n\n')) > maxBytes) throw new Error(`Required policies exceed the ${maxBytes}-byte context budget; reduce policy scope rather than truncating rules.`);
   if (query) {
-    const result = await search(config, query, {cwd, limit: 4, warmOnly: true});
+    // Per-prompt references stay project-only: global notes matched on one common word and drowned the project hits.
+    const result = await search(config, query, {cwd, limit: 4, warmOnly: true, workspace: referencesOnly ? project : ''});
+    const words = queryWords(query);
+    // Lexical-only prompt references must cover half the prompt's distinct words (min 2); one common word was enough before.
+    const minimumOverlap = Math.max(2, Math.ceil(words.length / 2));
     for (const item of result.items) {
       if (paths.includes(item.path)) continue;
       const note = await readNote(config, item.path);
-      const match = passageMatch(note.content, queryWords(query));
+      const match = passageMatch(note.content, words);
       const semanticEvidence = item.semanticScore !== undefined && item.revision === note.revision;
       if (!match && !semanticEvidence) continue;
+      if (referencesOnly && !semanticEvidence) {
+        const terms = new Set(lexicalTerms(`${note.title} ${note.content.replace(/^---\r?\n[\s\S]*?\r?\n---(?:\r?\n|$)/, '')}`));
+        if (words.filter(word => terms.has(word)).length < minimumOverlap) continue;
+      }
       const semanticStart = Number.isInteger(item.start) && item.start >= 0 ? item.start : semanticEvidence ? note.content.split(/(?<=\n)/).slice(0, Math.max(0, (item.line || 1) - 1)).join('').length : 0;
       const hit = match?.index ?? semanticStart;
       const matchEnd = match?.end ?? Math.min(note.content.length, hit + item.excerpt.length);
