@@ -58,11 +58,12 @@ test('referencesOnly prompt context omits the owner block, keeps only current-pr
   config.projects = [{id: 'alpha', root}];
   await put(config, 'Agents/Memory/Ref.md', '---\nproject: alpha\n---\n# Ref\nrefprobe matching evidence');
   await put(config, 'Agents/Memory/Global.md', '---\nproject: global\n---\n# Global\nrefprobe global evidence');
-  await put(config, 'Agents/Memory/Weak.md', '---\nproject: alpha\n---\n# Weak\nrefprobe alone');
+  await put(config, 'Agents/Memory/Weak.md', '---\nproject: alpha\n---\n# Weak\nrefprobe it alone');
   const prompt = await policies(config, root, 'refprobe matching evidence', {source: 'claude', referencesOnly: true});
   assert.match(prompt, /REFERENCE Agents\/Memory\/Ref\.md[\s\S]*refprobe matching evidence/);
   assert.doesNotMatch(prompt, /Global\.md|Weak\.md|SOURCE Owner\//);
   assert.equal(await policies(config, root, 'refprobe', {source: 'claude', referencesOnly: true}), '');
+  assert.equal(await policies(config, root, 'refprobe it', {source: 'claude', referencesOnly: true}), '');
   assert.equal(await policies(config, root, 'zzznomatchzzz', {source: 'claude', referencesOnly: true}), '');
   const usages = await getNoteUsage(config, await catalog(config));
   assert.equal(usages.notes.find(n => n.path === 'Owner/Policies.md').usage.context30d, 0);

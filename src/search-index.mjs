@@ -35,8 +35,13 @@ export function lexicalTerms(value) {
   return normalizeSearchText(value).match(/[\p{L}\p{N}][\p{L}\p{N}+#]*/gu) || [];
 }
 
+// Function words and chat filler: they appear in nearly every note, so a match on them is not evidence.
+const STOPWORDS = new Set(('the and for this that with from have please what how can you a an of to in on at by or as if so is it its was were are be been being do does did done ' +
+  'i me my we us our your they them their he she his her these those there here then than but not no yes ok okay just also all any some into about out up ' +
+  'will would should could may might must shall let lets get got go now very too only when where why which who whom whose while thanks thank s t m d ll re ve don').split(' ')); // trailing entries are contraction fragments: lexicalTerms splits on apostrophes
+
 export function queryWords(query) {
-  return [...new Set(lexicalTerms(query))].filter(word => !['the','and','for','this','that','with','from','have','please','what','how','can','you'].includes(word));
+  return [...new Set(lexicalTerms(query))].filter(word => !STOPWORDS.has(word));
 }
 
 let warm = null;
