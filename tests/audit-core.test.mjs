@@ -70,6 +70,37 @@ test('referencesOnly prompt context omits the owner block, keeps only current-pr
   assert.match(await policies(config, root, 'refprobe', {source: 'claude'}), /Global\.md/);
 });
 
+test('per-prompt references cap at two, need their overlap inside the excerpt, and skip notes already seen', async t => {
+  const {root, config} = await fixture(t);
+  config.projects = [{id: 'alpha', root}];
+  for (const name of ['A', 'B', 'C']) await put(config, `Agents/Memory/${name}.md`, `---\nproject: alpha\n---\n# ${name}\ncapprobe overlap evidence ${name}`);
+  await put(config, 'Agents/Memory/Scattered.md', '---\nproject: alpha\n---\n# Scattered\nscatterprobe early\n' + 'filler text line\n'.repeat(200) + 'scatterwide late');
+  const count = text => (text.match(/^REFERENCE /gm) || []).length;
+  assert.equal(count(await policies(config, root, 'capprobe overlap evidence', {source: 'claude', referencesOnly: true})), 2);
+  assert.equal(await policies(config, root, 'scatterprobe scatterwide', {source: 'claude', referencesOnly: true}), '');
+  // A stray early hit must not hide a later passage where the prompt words cluster.
+  await put(config, 'Agents/Memory/Cluster.md', '---\nproject: alpha\n---\n# Cluster\nclusterone stray\n' + 'filler text line\n'.repeat(200) + 'clusterone clustertwo together');
+  assert.match(await policies(config, root, 'clusterone clustertwo', {source: 'claude', referencesOnly: true}), /REFERENCE Agents\/Memory\/Cluster\.md[\s\S]*clusterone clustertwo together/);
+  const seen = new Set();
+  assert.equal(count(await policies(config, root, 'capprobe overlap evidence', {source: 'claude', referencesOnly: true, seen})), 2);
+  assert.equal(seen.size, 2);
+  assert.equal(count(await policies(config, root, 'capprobe overlap evidence', {source: 'claude', referencesOnly: true, seen})), 1);
+  assert.equal(seen.size, 3);
+  assert.equal(await policies(config, root, 'capprobe overlap evidence', {source: 'claude', referencesOnly: true, seen}), '');
+  // Unrestricted callers (MCP, CLI) keep every match.
+  assert.equal(count(await policies(config, root, 'capprobe overlap evidence', {source: 'cli'})), 3);
+});
+
+test('lean subagent context points at owner notes without their text or a usage record', async t => {
+  const {config} = await fixture(t);
+  const lean = await policies(config, process.cwd(), '', {source: 'claude', lean: true});
+  assert.match(lean, /OWNER Owner\/Policies\.md · revision [0-9a-f]+/);
+  assert.match(lean, /instructions\.md/);
+  assert.doesNotMatch(lean, /SOURCE Owner\/|Required rule/);
+  const usages = await getNoteUsage(config, await catalog(config));
+  assert.equal(usages.notes.find(n => n.path === 'Owner/Policies.md').usage.context30d, 0);
+});
+
 test('Unicode case expansion before a match does not displace search or context evidence', async t => {
   const {config} = await fixture(t);
   const content = '# Unicode\n' + 'İ'.repeat(1000) + '\nneedleunicode actual evidence';

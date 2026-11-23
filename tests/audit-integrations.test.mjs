@@ -49,6 +49,31 @@ test('Claude observes only successful policy loads and rejects oversized mandato
   assert.equal((await getHarnessStatus(f.config)).harnesses[1].observation.last.outcome, 'success');
 });
 
+test('Claude prompt references reach a session once, return after compaction, and subagents get pointers only', async t => {
+  const f = await fixture(t);
+  await fs.writeFile(f.config.configPath, JSON.stringify({vault: f.vault, backupDir: path.join(f.root, 'backups'), projects: [{id: 'alpha', root: f.root}]}));
+  await fs.mkdir(path.join(f.vault, 'Agents', 'Memory'), {recursive: true});
+  await fs.writeFile(path.join(f.vault, 'Agents', 'Memory', 'Ref.md'), '---\nproject: alpha\n---\n# Ref\nonceprobe matching evidence');
+  const hook = payload => run(f, 'integrations/claude-hook.mjs', [], JSON.stringify({cwd: f.root, session_id: 'sess-1', ...payload}));
+  const context = result => { assert.equal(result.status, 0, result.stderr); return result.stdout ? JSON.parse(result.stdout).hookSpecificOutput.additionalContext : ''; };
+  const ask = {hook_event_name: 'UserPromptSubmit', prompt: 'onceprobe matching evidence'};
+  assert.match(context(hook(ask)), /REFERENCE Agents\/Memory\/Ref\.md/);
+  assert.equal(context(hook(ask)), '');
+  assert.match(context(hook({...ask, session_id: 'sess-2'})), /REFERENCE Agents\/Memory\/Ref\.md/);
+  context(hook({hook_event_name: 'SessionStart', source: 'resume'}));
+  assert.equal(context(hook(ask)), '');
+  context(hook({hook_event_name: 'SessionStart', source: 'compact'}));
+  assert.match(context(hook(ask)), /REFERENCE Agents\/Memory\/Ref\.md/);
+  // Corrupt state fails open instead of blocking the prompt.
+  await fs.writeFile(path.join(f.root, '.state', 'prompt-refs-sess-1.json'), '{not json');
+  assert.match(context(hook(ask)), /REFERENCE Agents\/Memory\/Ref\.md/);
+  assert.match(context(hook({...ask, session_id: undefined})), /REFERENCE/);
+  const sub = context(hook({hook_event_name: 'SubagentStart'}));
+  assert.match(sub, /OWNER Owner\/Policies\.md/);
+  assert.doesNotMatch(sub, /Follow the rules/);
+  assert.match(context(hook({hook_event_name: 'SessionStart', source: 'startup'})), /Follow the rules/);
+});
+
 test('standalone installer preserves settings, replaces only the requested old hooks, and is idempotent', async t => {
   const f = await fixture(t);
   const settings = path.join(f.home, '.claude', 'settings.json');
