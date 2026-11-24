@@ -4,6 +4,7 @@ import { isDesktop } from './desktop-bridge.mjs';
 export default function StatusBar({
   sseStatus,
   backendInfo,
+  updateInfo,
   stats,
   pendingCount,
   zoomPercent,
@@ -69,6 +70,16 @@ export default function StatusBar({
             title={`Copy full revision (${stats.revision})`}
           >
             {copiedRev ? 'Copied rev' : stats.revision.slice(0, 8)}
+          </button>
+        )}
+        {updateInfo?.available && updateInfo?.targetVersion && (
+          <button
+            type="button"
+            className="statusbar-item statusbar-accent"
+            onClick={onOpenSettings}
+            title={updateInfo.message || `Update v${updateInfo.targetVersion} ready`}
+          >
+            Update v{updateInfo.targetVersion}
           </button>
         )}
         <button

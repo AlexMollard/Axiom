@@ -30,3 +30,4 @@ reqwest = { version = "0.12", default-features = false, features = ["blocking", 
 tokio = { version = "1", features = ["time", "rt-multi-thread"] }
 url = "2"
 urlencoding = "2"
+velopack = "1.2.161"

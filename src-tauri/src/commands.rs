@@ -3,7 +3,7 @@ use sha2::{Digest, Sha256};
 use std::path::PathBuf;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
-use tauri::{AppHandle, Manager, State, WebviewUrl, WebviewWindowBuilder};
+use tauri::{AppHandle, Emitter, Manager, State, WebviewUrl, WebviewWindowBuilder};
 use tauri_plugin_dialog::DialogExt;
 use tauri_plugin_notification::NotificationExt;
 
@@ -459,6 +459,62 @@ pub fn desktop_quit(app: AppHandle, state: State<'_, AppRuntime>) -> Result<(), 
     if let Ok(mut backend) = state.backend.lock() {
         backend.shutdown_if_spawned();
     }
+    app.exit(0);
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn desktop_check_updates(
+    app: AppHandle,
+    state: State<'_, AppRuntime>,
+) -> Result<crate::updater::UpdateCheckResult, String> {
+    let (result, update_info) = tauri::async_runtime::spawn_blocking(crate::updater::check_updates)
+        .await
+        .map_err(|e| format!("Update check task failed: {e}"))?;
+    let ok = result?;
+    if let Ok(mut guard) = state.pending_update.lock() {
+        *guard = if ok.available { update_info } else { None };
+    }
+    if ok.available {
+        let _ = app.emit("axiom://update-available", &ok);
+    }
+    Ok(ok)
+}
+
+#[tauri::command]
+pub async fn desktop_install_update(
+    app: AppHandle,
+    state: State<'_, AppRuntime>,
+) -> Result<(), String> {
+    let cached = state
+        .pending_update
+        .lock()
+        .map_err(|_| "Update state unavailable.".to_string())?
+        .clone();
+    let info = match cached {
+        Some(info) => info,
+        None => {
+            let (result, fetched) =
+                tauri::async_runtime::spawn_blocking(crate::updater::check_updates)
+                    .await
+                    .map_err(|e| format!("Update check task failed: {e}"))?;
+            let checked = result?;
+            if !checked.available {
+                return Err(checked.message);
+            }
+            fetched.ok_or_else(|| "Update metadata missing.".to_string())?
+        }
+    };
+
+    tauri::async_runtime::spawn_blocking(move || crate::updater::download_and_prepare_update(&info))
+        .await
+        .map_err(|e| format!("Update install task failed: {e}"))??;
+
+    state.quitting.store(true, Ordering::SeqCst);
+    if let Ok(mut backend) = state.backend.lock() {
+        backend.shutdown_if_spawned();
+    }
+    let _ = app.emit("axiom://update-installing", ());
     app.exit(0);
     Ok(())
 }

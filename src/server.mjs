@@ -1,7 +1,7 @@
 import http from 'node:http';
 import net from 'node:net';
 import { readFile } from 'node:fs/promises';
-import { mkdirSync, writeFileSync, appendFileSync, statSync, realpathSync } from 'node:fs';
+import { mkdirSync, readFileSync, writeFileSync, appendFileSync, statSync, realpathSync } from 'node:fs';
 import os from 'node:os';
 import { format } from 'node:util';
 import { fileURLToPath } from 'node:url';
@@ -25,6 +25,7 @@ import {getCleanup} from './cleanup.mjs';
 import {createEventHub} from './live-events.mjs';
 
 const buildDir = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'dist');
+const appVersion = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8')).version;
 const assetTypes = { '.js': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8', '.woff2': 'font/woff2', '.txt': 'text/plain; charset=utf-8', '.png': 'image/png' };
 const headers = {
   'Cache-Control': 'no-store',
@@ -216,7 +217,7 @@ export function createServer(config, configId = null) {
         const hashed = /^\/assets\/[a-zA-Z0-9_.-]+-[a-zA-Z0-9_-]{8}\.(?:js|css|woff2)$/.test(url.pathname);
         return send(200, type, await readFile(path.join(buildDir, url.pathname.slice(1))), hashed ? { 'Cache-Control': 'public, max-age=31536000, immutable' } : {});
       }
-      if (url.pathname === '/health') return json(200, configId ? { ok: true, apiVersion: 2, pid: process.pid, configId, uptimeSeconds: process.uptime() } : { ok: true, apiVersion: 2 });
+      if (url.pathname === '/health') return json(200, configId ? { ok: true, apiVersion: 2, appVersion, pid: process.pid, configId, uptimeSeconds: process.uptime() } : { ok: true, apiVersion: 2, appVersion });
       if (url.pathname === '/api/events') {
         if (req.method !== 'GET') { res.setHeader('Allow', 'GET'); return json(405, { error: 'Method not allowed' }); }
         return events.handleRequest(req, res, headers);

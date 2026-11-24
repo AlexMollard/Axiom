@@ -20,6 +20,7 @@ import {
   apiMutate,
   getDesktopInfo,
   getDesktopPrefs,
+  installDesktopUpdate,
   isDesktop,
   listenDesktop,
   openDetachedWindow,
@@ -324,6 +325,7 @@ function MainApp({ detached = false }) {
   const [zoomPercent, setZoomPercent] = useState(100);
   const [sseStatus, setSseStatus] = useState('reconnecting');
   const [backendInfo, setBackendInfo] = useState(null);
+  const [updateInfo, setUpdateInfo] = useState(null);
   const [editorStats, setEditorStats] = useState(null);
   const [externalChangedPath, setExternalChangedPath] = useState('');
   const [splitRoute, setSplitRoute] = useState(null);
@@ -499,6 +501,12 @@ function MainApp({ detached = false }) {
     }).then(fn => unsubs.push(fn));
     listenDesktop('axiom://backup-created', () => {
       setRefresh(n => n + 1);
+    }).then(fn => unsubs.push(fn));
+    listenDesktop('axiom://update-available', event => {
+      if (event.payload) setUpdateInfo(event.payload);
+    }).then(fn => unsubs.push(fn));
+    listenDesktop('axiom://open-settings', () => {
+      setSettingsOpen(true);
     }).then(fn => unsubs.push(fn));
     return () => { unsubs.forEach(fn => fn()); };
   }, [detached, navigate, confirm]);
@@ -1066,6 +1074,20 @@ function MainApp({ detached = false }) {
         <DesktopSettings
           open={settingsOpen}
           groups={groups}
+          pendingUpdate={updateInfo}
+          onUpdateInfo={setUpdateInfo}
+          onInstallUpdate={async () => {
+            if (dirty.current || tabs.some(t => t.dirty)) {
+              const ok = await confirm({
+                title: 'Unsaved changes',
+                message: 'You have unsaved editor changes. Download and restart Axiom to apply the update anyway?',
+                confirmLabel: 'Update & restart',
+                danger: true,
+              });
+              if (!ok) return;
+            }
+            await installDesktopUpdate();
+          }}
           onClose={() => setSettingsOpen(false)}
           onZoomChange={z => applyZoom(z, false)}
           onRequestQuit={async () => {
@@ -1094,6 +1116,7 @@ function MainApp({ detached = false }) {
         <StatusBar
           sseStatus={sseStatus}
           backendInfo={backendInfo}
+          updateInfo={updateInfo}
           stats={statusMetrics}
           pendingCount={pending.length}
           zoomPercent={zoomPercent}

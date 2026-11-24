@@ -1,7 +1,9 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { X } from 'lucide-react';
 import {
+  checkDesktopUpdates,
   getDesktopInfo,
+  installDesktopUpdate,
   openInBrowser,
   quitDesktop,
   restartBackend,
@@ -9,13 +11,29 @@ import {
   saveDesktopPrefs,
 } from './desktop-bridge.mjs';
 
-export default function DesktopSettings({ open, groups, onClose, onZoomChange, onRequestQuit }) {
+export default function DesktopSettings({
+  open,
+  groups,
+  pendingUpdate,
+  onUpdateInfo,
+  onInstallUpdate,
+  onClose,
+  onZoomChange,
+  onRequestQuit,
+}) {
   const dialogRef = useRef(null);
   const previousFocusRef = useRef(null);
   const [info, setInfo] = useState(null);
   const [prefs, setPrefs] = useState(null);
   const [busy, setBusy] = useState(false);
+  const [checkingUpdate, setCheckingUpdate] = useState(false);
+  const [installingUpdate, setInstallingUpdate] = useState(false);
+  const [updateInfo, setUpdateInfo] = useState(pendingUpdate || null);
   const [status, setStatus] = useState(null);
+
+  useEffect(() => {
+    if (pendingUpdate) setUpdateInfo(pendingUpdate);
+  }, [pendingUpdate]);
 
   useEffect(() => {
     const dialog = dialogRef.current;
@@ -73,6 +91,38 @@ export default function DesktopSettings({ open, groups, onClose, onZoomChange, o
       setStatus({ text: e.message || 'Restart failed.', error: true });
     } finally {
       setBusy(false);
+    }
+  };
+
+  const doCheckUpdates = async () => {
+    setCheckingUpdate(true);
+    setStatus(null);
+    try {
+      const res = await checkDesktopUpdates();
+      if (res) {
+        setUpdateInfo(res);
+        onUpdateInfo?.(res);
+        setStatus({ text: res.message, error: false });
+      }
+    } catch (e) {
+      setStatus({ text: e.message || 'Could not check for updates.', error: true });
+    } finally {
+      setCheckingUpdate(false);
+    }
+  };
+
+  const doInstallUpdate = async () => {
+    setInstallingUpdate(true);
+    setStatus(null);
+    try {
+      if (onInstallUpdate) {
+        await onInstallUpdate();
+      } else {
+        await installDesktopUpdate();
+      }
+    } catch (e) {
+      setStatus({ text: e.message || 'Could not install update.', error: true });
+      setInstallingUpdate(false);
     }
   };
 
@@ -178,6 +228,24 @@ export default function DesktopSettings({ open, groups, onClose, onZoomChange, o
                   </div>
                 </div>
               )}
+
+              <div className="desktop-settings-section">
+                <span className="muted">
+                  Updates (Velopack): <strong>v{updateInfo?.currentVersion || info?.version || '1.3.0'}</strong>
+                  {updateInfo?.targetVersion ? ` -> v${updateInfo.targetVersion} available` : ''}
+                </span>
+                {updateInfo?.message && <span className="muted">{updateInfo.message}</span>}
+                <div className="desktop-settings-row">
+                  <button type="button" className="button" disabled={checkingUpdate || installingUpdate} onClick={doCheckUpdates}>
+                    {checkingUpdate ? 'Checking...' : 'Check for updates'}
+                  </button>
+                  {updateInfo?.available && (
+                    <button type="button" className="button button-primary" disabled={installingUpdate} onClick={doInstallUpdate}>
+                      {installingUpdate ? 'Downloading & restarting...' : `Download & restart (v${updateInfo.targetVersion})`}
+                    </button>
+                  )}
+                </div>
+              </div>
             </>
           )}
           {status && (

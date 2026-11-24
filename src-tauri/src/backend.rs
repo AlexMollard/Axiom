@@ -37,6 +37,7 @@ const REQUIRED_BACKEND_API_VERSION: u32 = 2;
 struct HealthResponse {
     ok: bool,
     api_version: Option<u32>,
+    app_version: Option<String>,
     pid: Option<u32>,
     config_id: Option<String>,
     uptime_seconds: Option<f64>,
@@ -133,15 +134,20 @@ fn find_app_root() -> Option<PathBuf> {
             return Some(candidate);
         }
     }
-    if let Ok(cwd) = std::env::current_dir() {
-        for ancestor in cwd.ancestors() {
+    if let Ok(exe) = std::env::current_exe() {
+        if let Some(dir) = exe.parent() {
+            if dir.join("src").join("server.mjs").is_file() {
+                return Some(dir.to_path_buf());
+            }
+        }
+        for ancestor in exe.ancestors() {
             if ancestor.join("src").join("server.mjs").is_file() {
                 return Some(ancestor.to_path_buf());
             }
         }
     }
-    if let Ok(exe) = std::env::current_exe() {
-        for ancestor in exe.ancestors() {
+    if let Ok(cwd) = std::env::current_dir() {
+        for ancestor in cwd.ancestors() {
             if ancestor.join("src").join("server.mjs").is_file() {
                 return Some(ancestor.to_path_buf());
             }
@@ -299,11 +305,18 @@ impl BackendManager {
                         return self.status_snapshot(Some(health));
                     }
                 }
-                if self.child.is_none()
-                    && health.api_version.unwrap_or(0) < REQUIRED_BACKEND_API_VERSION
-                {
+                let needs_api_upgrade =
+                    health.api_version.unwrap_or(0) < REQUIRED_BACKEND_API_VERSION;
+                let needs_version_restart = health.app_version.as_deref()
+                    != Some(env!("CARGO_PKG_VERSION"));
+                if self.child.is_none() && (needs_api_upgrade || needs_version_restart) {
                     let old_ver = health.api_version.unwrap_or(0);
                     if let Err(err) = self.restart_attached_via_script() {
+                        if !needs_api_upgrade {
+                            self.mode = "attached".to_string();
+                            self.last_error = None;
+                            return self.status_snapshot(Some(health));
+                        }
                         self.mode = "error".to_string();
                         self.last_error = Some(format!(
                             "Attached Axiom backend is outdated (apiVersion {old_ver} < {REQUIRED_BACKEND_API_VERSION}) and auto-restart failed: {err}"
@@ -313,27 +326,32 @@ impl BackendManager {
                     let deadline = Instant::now() + Duration::from_secs(5);
                     while Instant::now() < deadline {
                         if let Ok(Some(refreshed)) = self.probe_health() {
-                            if refreshed.ok {
-                                if refreshed.api_version.unwrap_or(0)
+                            if refreshed.ok
+                                && refreshed.api_version.unwrap_or(0)
                                     >= REQUIRED_BACKEND_API_VERSION
-                                {
-                                    self.mode = "attached".to_string();
-                                    self.last_error = None;
-                                    return self.status_snapshot(Some(refreshed));
-                                }
+                                && (!needs_version_restart
+                                    || refreshed.app_version.as_deref()
+                                        == Some(env!("CARGO_PKG_VERSION")))
+                            {
+                                self.mode = "attached".to_string();
+                                self.last_error = None;
+                                return self.status_snapshot(Some(refreshed));
                             }
                         }
                         std::thread::sleep(Duration::from_millis(200));
                     }
                     if let Ok(Some(still_old)) = self.probe_health() {
-                        if still_old.ok
-                            && still_old.api_version.unwrap_or(0) < REQUIRED_BACKEND_API_VERSION
-                        {
-                            self.mode = "error".to_string();
-                            self.last_error = Some(format!(
-                                "Attached Axiom backend remained outdated after restart (apiVersion {} < {REQUIRED_BACKEND_API_VERSION}).",
-                                still_old.api_version.unwrap_or(0)
-                            ));
+                        if still_old.ok {
+                            if still_old.api_version.unwrap_or(0) < REQUIRED_BACKEND_API_VERSION {
+                                self.mode = "error".to_string();
+                                self.last_error = Some(format!(
+                                    "Attached Axiom backend remained outdated after restart (apiVersion {} < {REQUIRED_BACKEND_API_VERSION}).",
+                                    still_old.api_version.unwrap_or(0)
+                                ));
+                                return self.status_snapshot(Some(still_old));
+                            }
+                            self.mode = "attached".to_string();
+                            self.last_error = None;
                             return self.status_snapshot(Some(still_old));
                         }
                     }

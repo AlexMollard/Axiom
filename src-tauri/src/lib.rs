@@ -2,6 +2,7 @@ mod backend;
 mod commands;
 mod storage;
 mod tray;
+mod updater;
 
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
@@ -90,6 +91,8 @@ pub fn run() {
             commands::desktop_hide_quick_overlay,
             commands::desktop_set_dirty_tabs,
             commands::desktop_quit,
+            commands::desktop_check_updates,
+            commands::desktop_install_update,
         ])
         .setup(|app| {
             let config_path = resolve_config_path(None)
@@ -115,6 +118,7 @@ pub fn run() {
                 dirty_tabs: AtomicUsize::new(0),
                 quitting: AtomicBool::new(false),
                 tray: Mutex::new(None),
+                pending_update: Mutex::new(None),
             });
 
             if let Err(err) = setup_tray(app.handle(), &status_label) {
@@ -320,6 +324,25 @@ pub fn run() {
                             update_tray_backend_status(&monitor_handle, &next);
                             let _ = monitor_handle.emit("axiom://backend-status", &next);
                         }
+                    }
+                }
+            });
+
+            let update_handle = app.handle().clone();
+            tauri::async_runtime::spawn(async move {
+                tokio::time::sleep(Duration::from_secs(8)).await;
+                let state = update_handle.state::<AppRuntime>();
+                if state.quitting.load(Ordering::SeqCst) {
+                    return;
+                }
+                if let Ok((Ok(res), update_info)) =
+                    tauri::async_runtime::spawn_blocking(updater::check_updates).await
+                {
+                    if res.available {
+                        if let Ok(mut pending) = state.pending_update.lock() {
+                            *pending = update_info;
+                        }
+                        let _ = update_handle.emit_to("main", "axiom://update-available", res);
                     }
                 }
             });

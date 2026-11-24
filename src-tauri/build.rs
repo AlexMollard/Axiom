@@ -24,6 +24,8 @@ fn main() {
                 "desktop_hide_quick_overlay",
                 "desktop_set_dirty_tabs",
                 "desktop_quit",
+                "desktop_check_updates",
+                "desktop_install_update",
             ]),
         ),
     )

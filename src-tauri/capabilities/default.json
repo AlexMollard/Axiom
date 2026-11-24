@@ -43,6 +43,8 @@
     "allow-desktop-focus-main-route",
     "allow-desktop-hide-quick-overlay",
     "allow-desktop-set-dirty-tabs",
-    "allow-desktop-quit"
+    "allow-desktop-quit",
+    "allow-desktop-check-updates",
+    "allow-desktop-install-update"
   ]
 }

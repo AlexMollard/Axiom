@@ -20,6 +20,7 @@ pub struct AppRuntime {
     pub dirty_tabs: AtomicUsize,
     pub quitting: AtomicBool,
     pub tray: Mutex<Option<TrayHandles>>,
+    pub pending_update: Mutex<Option<velopack::UpdateInfo>>,
 }
 
 pub fn show_main_window(app: &AppHandle) {
@@ -76,6 +77,8 @@ pub fn setup_tray(app: &AppHandle, status_label: &str) -> Result<(), String> {
         .map_err(|e| e.to_string())?;
     let restart_item = MenuItem::with_id(app, "restart", "Restart Backend", true, None::<&str>)
         .map_err(|e| e.to_string())?;
+    let updates_item = MenuItem::with_id(app, "check_updates", "Check for Updates", true, None::<&str>)
+        .map_err(|e| e.to_string())?;
     let sep3 = PredefinedMenuItem::separator(app).map_err(|e| e.to_string())?;
     let quit_item =
         MenuItem::with_id(app, "quit", "Quit Axiom", true, None::<&str>).map_err(|e| e.to_string())?;
@@ -94,6 +97,7 @@ pub fn setup_tray(app: &AppHandle, status_label: &str) -> Result<(), String> {
             &sep2,
             &status_item,
             &restart_item,
+            &updates_item,
             &sep3,
             &quit_item,
         ],
@@ -175,6 +179,25 @@ pub fn setup_tray(app: &AppHandle, status_label: &str) -> Result<(), String> {
                     if let Some(status) = status {
                         update_tray_backend_status(&handle, &status);
                         let _ = handle.emit("axiom://backend-status", status);
+                    }
+                });
+            }
+            "check_updates" => {
+                let handle = app.clone();
+                show_main_window(&handle);
+                let _ = handle.emit_to("main", "axiom://open-settings", ());
+                tauri::async_runtime::spawn(async move {
+                    let (result, update_info) =
+                        tauri::async_runtime::spawn_blocking(crate::updater::check_updates)
+                            .await
+                            .unwrap_or_else(|e| (Err(format!("Update check task failed: {e}")), None));
+                    if let Ok(res) = result {
+                        if res.available {
+                            if let Ok(mut pending) = handle.state::<AppRuntime>().pending_update.lock() {
+                                *pending = update_info;
+                            }
+                            let _ = handle.emit_to("main", "axiom://update-available", res);
+                        }
                     }
                 });
             }

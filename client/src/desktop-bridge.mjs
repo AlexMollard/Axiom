@@ -54,6 +54,14 @@ export async function restartBackend() {
   return invokeDesktop('desktop_restart_backend');
 }
 
+export async function checkDesktopUpdates() {
+  return invokeDesktop('desktop_check_updates');
+}
+
+export async function installDesktopUpdate() {
+  return invokeDesktop('desktop_install_update');
+}
+
 export async function triggerDesktopBackup() {
   return invokeDesktop('desktop_trigger_backup');
 }
