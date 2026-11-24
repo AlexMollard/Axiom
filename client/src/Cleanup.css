@@ -11,7 +11,7 @@
 .cleanup-controls label.cleanup-semantic-toggle { display: flex; align-items: center; gap: 8px; min-height: 40px; }
 .cleanup-semantic-toggle input { width: 16px; height: 16px; accent-color: var(--accent); }
 .cleanup-meta, .cleanup-note-meta, .cleanup-path { color: var(--muted); font-size: .85rem; }
-.cleanup-notice { padding: 14px 18px; margin: 16px 0; border-left: 3px solid var(--accent); }
+.cleanup-notice { padding: 14px 18px; margin: 16px 0; border-color: var(--accent-border); background: var(--accent-surface); }
 .cleanup-notice p { margin-top: 0; }
 .cleanup-notice ul { margin-bottom: 0; }
 .cleanup-coverage { margin: 16px 0; padding: 14px 18px; }

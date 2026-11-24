@@ -1,6 +1,7 @@
-import React, { useCallback, useEffect, useId, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useId, useMemo, useRef, useState } from 'react';
 import { ChevronDown, FileText, Radio, RefreshCw, Search, ShieldCheck } from 'lucide-react';
 import WorkspaceIcon from './WorkspaceIcon.jsx';
+import { subscribeVaultEvents } from './live-sync.mjs';
 import './UsageViews.css';
 
 const filters = [['all', 'All'], ['hot', 'Hot'], ['recent', 'Recent'], ['stale-candidate', 'Stale candidates'], ['insufficient-history', 'Insufficient history']];
@@ -17,7 +18,8 @@ function UsageTime({value, now}) {
 }
 
 function useUsage() {
-  const [data, setData] = useState(null), [error, setError] = useState(''), [refresh, setRefresh] = useState(0), [now, setNow] = useState(Date.now);
+  const [data, setData] = useState(null), [error, setError] = useState(''), [refresh, setRefresh] = useState(0), [now, setNow] = useState(Date.now), [live, setLive] = useState(false);
+  const liveRef = useRef(false);
   const reload = useCallback(() => setRefresh(n => n + 1), []);
   useEffect(() => {
     let active = true, controller, running = false;
@@ -34,14 +36,21 @@ function useUsage() {
       finally { running = false; }
     };
     load();
+    const unsubscribe = subscribeVaultEvents({
+      onStatus: status => {
+        liveRef.current = status === 'connected';
+        if (active) setLive(status === 'connected');
+      },
+      onUsage: () => { if (active) { setNow(Date.now()); load(); } },
+    });
     const wake = () => { if (document.visibilityState === 'visible') { setNow(Date.now()); load(); } };
-    const timer = setInterval(wake, 5000);
-    const clock = setInterval(() => { if (document.visibilityState === 'visible') setNow(Date.now()); }, 1000);
+    const timer = setInterval(() => { if (!liveRef.current) wake(); }, 5000);
+    const clock = setInterval(() => { if (document.visibilityState === 'visible') setNow(Date.now()); }, 30000);
     window.addEventListener('focus', wake);
     document.addEventListener('visibilitychange', wake);
-    return () => { active = false; controller?.abort(); clearInterval(timer); clearInterval(clock); window.removeEventListener('focus', wake); document.removeEventListener('visibilitychange', wake); };
+    return () => { active = false; unsubscribe(); controller?.abort(); clearInterval(timer); clearInterval(clock); window.removeEventListener('focus', wake); document.removeEventListener('visibilitychange', wake); };
   }, [refresh]);
-  return { data, error, reload, now };
+  return { data, error, reload, now, live };
 }
 
 function TrackingNotice({ tracking }) {
@@ -59,7 +68,7 @@ export function UsageSummary({ path }) {
 }
 
 export default function UsagePage({ groups }) {
-  const { data, error, reload, now } = useUsage();
+  const { data, error, reload, now, live } = useUsage();
   const detailPrefix = useId();
   const [filter, setFilter] = useState('all'), [workspace, setWorkspace] = useState('all'), [query, setQuery] = useState(''), [visible, setVisible] = useState(48), [expanded, setExpanded] = useState(null);
   const groupById = useMemo(() => new Map(groups.map(group => [group.id, group])), [groups]);
@@ -77,7 +86,7 @@ export default function UsagePage({ groups }) {
   const totals = useMemo(() => scoped.reduce((sum, note) => [sum[0] + note.usage.reads30d, sum[1] + note.usage.excerpts30d, sum[2] + note.usage.context30d], [0, 0, 0]), [scoped]);
   const healthy = data?.tracking.healthy;
   return <div className="usage-page">
-    <header className="usage-page-heading"><div><p className="eyebrow">Knowledge tools</p><h1>Note usage</h1><p className="page-description">See what gets retrieved. Review what may no longer earn its place.</p></div><div className="usage-heading-actions">{healthy && <span className="usage-live"><Radio size={14} aria-hidden="true" /> Live · 5s updates</span>}<button className="button" type="button" onClick={reload} aria-label="Refresh usage"><RefreshCw size={16} aria-hidden="true" /> Refresh</button></div></header>
+    <header className="usage-page-heading"><div><p className="eyebrow">Knowledge tools</p><h1>Note usage</h1><p className="page-description">See what gets retrieved. Review what may no longer earn its place.</p></div><div className="usage-heading-actions">{healthy && <span className="usage-live"><Radio size={14} aria-hidden="true" /> {live ? 'Live · instant updates' : 'Live · 5s updates'}</span>}<button className="button" type="button" onClick={reload} aria-label="Refresh usage"><RefreshCw size={16} aria-hidden="true" /> Refresh</button></div></header>
     {error ? <div className="error-notice" role="alert">Could not load note usage: {error}</div> : !data ? <p className="muted">Loading note usage…</p> : !healthy ? <div className="error-notice" role="alert"><strong>Tracking unavailable.</strong> {data.tracking.reason} Missing deliveries cannot establish that a note is unused.</div> : <>
       <section className="usage-pulse" aria-label="Deliveries for the current workspace and search across all statuses over 30 UTC calendar days">{[['Full retrievals', 'A complete note returned by a memory read'], ['Search excerpts', 'Note excerpts returned in search results'], ['Context loads', 'Automatic policy and reference context']].map(([label, description], index) => <div key={label}><span>{label}</span><strong title={description}>{totals[index].toLocaleString()}</strong></div>)}<div className="usage-window"><span>Count window</span><strong>30 <small>UTC days</small></strong></div></section>
       <div className="usage-context"><span>Recorded delivery, not proof of understanding.</span><TrackingNotice tracking={data.tracking} /></div>

@@ -1,4 +1,5 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
+import { isDesktop } from './desktop-bridge.mjs';
 import './SearchExperience.css';
 
 const noteUrl = path => '/?note=' + encodeURIComponent(path);
@@ -20,7 +21,7 @@ export function SearchResults({ query, groups, filters, onFiltersChange }) {
     const controller = new AbortController();
     let active = true;
     const params = new URLSearchParams({ q: query, workspace, owner, review, scope: searchScope, offset: String(offset), limit: '50' });
-    setResult(null); setError(''); setSemanticMessage(mode === 'hybrid' ? 'Preparing semantic results; a sleeping model may take 10–40 seconds to wake and index.' : '');
+    setResult(null); setError(''); setSemanticMessage(mode === 'hybrid' ? 'Preparing semantic results; a sleeping model may take 10-40 seconds to wake and index.' : '');
     const request = async searchMode => {
       const requestParams = new URLSearchParams(params); requestParams.set('mode', searchMode);
       const response = await fetch('/api/search?' + requestParams, { signal: controller.signal });
@@ -68,13 +69,21 @@ export function SearchResults({ query, groups, filters, onFiltersChange }) {
 
 const actions = [
   { title: 'New note', url: '/?edit=1' }, { title: 'Review queue', url: '/?view=review' },
+  { title: 'All vaults graph', url: '/?project=__all&mode=graph' },
   { title: 'Memory health', url: '/?view=health' }, { title: 'Clean up', url: '/?view=cleanup' }, { title: 'Harnesses', url: '/?view=harnesses' },
   { title: 'Recovery', url: '/?view=recovery' }, { title: 'Usage', url: '/?view=usage' },
   { title: 'Workspaces', url: '/?view=projects' }, { title: 'Trash', url: '/?view=trash' },
 ];
-export function CommandPalette({ open, onClose, onNavigate, groups, notes, vaultId, recent }) {
+const desktopActions = [
+  { title: 'Toggle split pane', desktopAction: 'toggle-split' },
+  { title: 'Pop out current view', desktopAction: 'pop-out' },
+  { title: 'Open vault folder', desktopAction: 'open-vault' },
+  { title: 'Desktop settings', desktopAction: 'open-settings' },
+  { title: 'Reset zoom to 100%', desktopAction: 'reset-zoom' },
+];
+export function CommandPalette({ open, onClose, onNavigate, onOpenNewTab, onOpenSplit, onDesktopAction, groups, notes, vaultId, recent }) {
   const [query, setQuery] = useState(''), [selected, setSelected] = useState(0);
-  const input = useRef(null), previous = useRef(null), dialog = useRef(null);
+  const input = useRef(null), previous = useRef(null), dialog = useRef(null), navigated = useRef(false);
   const [storedRecent, setStoredRecent] = useState({ vaultId: null, paths: [], error: '' });
   useEffect(() => {
     if (!open || !vaultId) return;
@@ -86,9 +95,19 @@ export function CommandPalette({ open, onClose, onNavigate, groups, notes, vault
     }
   }, [open, vaultId, recent]);
   useEffect(() => {
-    if (!open) return;
-    previous.current = document.activeElement; setQuery(''); setSelected(0); input.current?.focus();
-    return () => previous.current?.focus?.();
+    const el = dialog.current;
+    if (!el) return;
+    if (open) {
+      navigated.current = false;
+      previous.current = document.activeElement;
+      setQuery('');
+      setSelected(0);
+      if (!el.open) el.showModal();
+      input.current?.focus();
+    } else if (el.open) {
+      el.close();
+      if (!navigated.current) previous.current?.focus?.();
+    }
   }, [open]);
   const entries = useMemo(() => {
     const terms = query.trim().toLowerCase().split(/\s+/).filter(Boolean);
@@ -96,24 +115,78 @@ export function CommandPalette({ open, onClose, onNavigate, groups, notes, vault
     const workspaces = [...groups].sort((a,b) => (a.group === 'home' ? 1 : 0) - (b.group === 'home' ? 1 : 0) || a.name.localeCompare(b.name));
     const recentState = recent?.vaultId === vaultId && recent.error ? recent : storedRecent;
     const byPath = new Map(notes.map(note => [note.path, note]));
-    const recentEntries = !terms.length && recentState.vaultId === vaultId ? recentState.paths.map(path => byPath.get(path)).filter(Boolean).map(item => ({title: item.title, detail: item.path, kind: 'Recent', url: noteUrl(item.path)})) : [];
+    const recentEntries = !terms.length && recentState.vaultId === vaultId ? recentState.paths.map(path => byPath.get(path)).filter(Boolean).map(item => ({title: item.title, detail: item.path, path: item.path, kind: 'Recent', url: noteUrl(item.path)})) : [];
     return [
       ...recentEntries,
       ...actions.filter(item => matches(item.title)).map(item => ({...item, kind: 'Action'})),
+      ...(isDesktop() && onDesktopAction ? desktopActions.filter(item => matches(item.title)).map(item => ({...item, kind: 'Desktop', url: '#desktop:' + item.desktopAction})) : []),
       ...workspaces.filter(item => matches(item.name)).map(item => ({title: item.name, kind: 'Workspace', url: '/?project=' + encodeURIComponent(item.id)})),
-      ...notes.filter(item => matches(item.title + ' ' + item.path)).slice(0, 50).map(item => ({title: item.title, detail: item.path, kind: 'Note', url: noteUrl(item.path)})),
+      ...notes.filter(item => matches(item.title + ' ' + item.path)).slice(0, 50).map(item => ({title: item.title, detail: item.path, path: item.path, kind: 'Note', url: noteUrl(item.path)})),
     ];
-  }, [query, groups, notes, vaultId, recent, storedRecent]);
+  }, [query, groups, notes, vaultId, recent, storedRecent, onDesktopAction]);
   useEffect(() => { setSelected(0); }, [query]);
   useEffect(() => { if (open) dialog.current?.querySelector(`#palette-option-${selected}`)?.scrollIntoView({block: 'nearest'}); }, [open, selected]);
-  if (!open) return null;
-  const choose = item => { if (item && onNavigate(item.url) !== false) onClose(); };
+  const choose = (item, modifier = 'default') => {
+    if (!item) return;
+    if (item.desktopAction) {
+      navigated.current = true;
+      onDesktopAction?.(item.desktopAction);
+      onClose();
+      return;
+    }
+    if (modifier === 'split' && item.path && onOpenSplit) {
+      navigated.current = true;
+      onOpenSplit({ kind: 'note', path: item.path });
+      onClose();
+      return;
+    }
+    if (modifier === 'newTab' && onOpenNewTab) {
+      navigated.current = true;
+      if (onOpenNewTab(item.url) !== false) onClose();
+      return;
+    }
+    navigated.current = true;
+    if (onNavigate(item.url) !== false) onClose();
+  };
   const keyDown = event => {
     if (event.key === 'Escape') { event.preventDefault(); onClose(); }
     else if (event.key === 'ArrowDown') { event.preventDefault(); setSelected(i => entries.length ? (i + 1) % entries.length : 0); }
     else if (event.key === 'ArrowUp') { event.preventDefault(); setSelected(i => entries.length ? (i + entries.length - 1) % entries.length : 0); }
-    else if (event.key === 'Enter') { event.preventDefault(); choose(entries[selected]); }
+    else if (event.key === 'Enter') {
+      event.preventDefault();
+      const mod = (event.ctrlKey || event.metaKey) ? 'newTab' : event.altKey ? 'split' : 'default';
+      choose(entries[selected], mod);
+    }
     else if (event.key === 'Tab') { event.preventDefault(); input.current?.focus(); }
   };
-  return <div className="palette-backdrop" onMouseDown={event => { if (event.target === event.currentTarget) onClose(); }}><div ref={dialog} className="command-palette" role="dialog" aria-modal="true" aria-label="Command palette" onKeyDown={keyDown}><input ref={input} role="combobox" aria-label="Search commands, workspaces and notes" aria-expanded="true" aria-controls="palette-results" aria-activedescendant={entries[selected] ? 'palette-option-' + selected : undefined} value={query} onChange={event => setQuery(event.target.value)} placeholder="Search notes, workspaces, and actions" />{(recent?.vaultId === vaultId && recent.error || storedRecent.vaultId === vaultId && storedRecent.error) && <p role="status">{recent?.error || storedRecent.error}</p>}<div id="palette-results" role="listbox" className="palette-results">{entries.map((item, index) => <React.Fragment key={item.kind + item.url}>{item.kind === 'Recent' && (index === 0 || entries[index - 1].kind !== 'Recent') && <div className="palette-group-label">Recent</div>}<div role="option" aria-selected={selected === index} id={'palette-option-' + index} className={'palette-option' + (index === selected ? ' selected' : '')} onMouseMove={() => setSelected(index)} onClick={() => choose(item)}><span><strong>{item.title}</strong>{item.detail && <small>{item.detail}</small>}</span><small>{item.kind}</small></div></React.Fragment>)}{!entries.length && <p>No matches.</p>}</div><small className="palette-hint">↑ ↓ to select · Enter to open · Esc to close</small></div></div>;
+  return (
+    <dialog
+      ref={dialog}
+      className="command-palette-dialog"
+      aria-label="Command palette"
+      onCancel={event => { event.preventDefault(); onClose(); }}
+      onClick={event => {
+        if (event.target !== dialog.current) return;
+        const r = dialog.current.getBoundingClientRect();
+        if (event.clientX < r.left || event.clientX > r.right || event.clientY < r.top || event.clientY > r.bottom) onClose();
+      }}
+      onKeyDown={keyDown}
+    >
+      <input ref={input} role="combobox" aria-label="Search commands, workspaces and notes" aria-expanded={open} aria-controls="palette-results" aria-activedescendant={entries[selected] ? 'palette-option-' + selected : undefined} value={query} onChange={event => setQuery(event.target.value)} placeholder="Search notes, workspaces, and actions" />
+      {(recent?.vaultId === vaultId && recent.error || storedRecent.vaultId === vaultId && storedRecent.error) && <p role="status">{recent?.error || storedRecent.error}</p>}
+      <div id="palette-results" role="listbox" className="palette-results">
+        {entries.map((item, index) => (
+          <React.Fragment key={item.kind + item.url}>
+            {item.kind === 'Recent' && (index === 0 || entries[index - 1].kind !== 'Recent') && <div className="palette-group-label">Recent</div>}
+            <div role="option" aria-selected={selected === index} id={'palette-option-' + index} className={'palette-option' + (index === selected ? ' selected' : '')} onMouseEnter={() => setSelected(index)} onClick={event => choose(item, (event.ctrlKey || event.metaKey) ? 'newTab' : event.altKey ? 'split' : 'default')}>
+              <span><strong>{item.title}</strong>{item.detail && <small>{item.detail}</small>}</span>
+              <small>{item.kind}</small>
+            </div>
+          </React.Fragment>
+        ))}
+        {!entries.length && <p>No matches.</p>}
+      </div>
+      <small className="palette-hint">↑ ↓ select · Enter open · Ctrl+Enter new tab · Alt+Enter split · Esc close</small>
+    </dialog>
+  );
 }

@@ -1,6 +1,7 @@
 .notification-trigger { position: relative; }
 .notification-badge { position: absolute; top: -4px; right: -5px; min-width: 17px; padding: 1px 4px; border-radius: 9px; background: var(--accent); color: var(--on-accent); font-size: 10px; font-weight: 800; line-height: 15px; font-variant-numeric: tabular-nums; }
 .notifications-dialog { position: fixed; inset: 80px 24px auto auto; margin: 0; padding: 0; width: min(420px, calc(100vw - 32px)); max-height: min(650px, calc(100dvh - 100px)); border: 1px solid var(--border); border-radius: 14px; background: var(--surface); color: var(--fg); box-shadow: 0 16px 48px #0006; }
+.desktop-frame .notifications-dialog { inset: 100px 24px auto auto; max-height: min(650px, calc(100dvh - 134px)); }
 .notifications-dialog[open] { display: flex; flex-direction: column; }
 .notifications-dialog::backdrop { background: #0003; }
 .notifications-heading { display: flex; justify-content: space-between; gap: 14px; padding: 20px; border-bottom: 1px solid var(--border); }
@@ -17,4 +18,4 @@
 .notification-dismiss { margin-top: 8px; color: var(--muted); }
 .notification-empty, .notification-issue { margin: 0; padding: 18px 20px; color: var(--muted); font-size: 13px; }.notification-issue { color: var(--error); }
 .notifications-dialog footer { padding: 16px 20px; border-top: 1px solid var(--border); }.notifications-dialog footer p { margin-top: 10px; }
-@media (max-width: 740px) { .notifications-dialog { inset: 76px 16px auto auto; max-height: calc(100dvh - 96px); } }
+@media (max-width: 740px) { .notifications-dialog { inset: 76px 16px auto auto; max-height: calc(100dvh - 96px); } .desktop-frame .notifications-dialog { inset: 108px 16px auto auto; max-height: calc(100dvh - 140px); } }

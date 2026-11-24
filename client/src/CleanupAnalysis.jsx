@@ -1,5 +1,6 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { analysisPrompt, buildAnalysisPack } from './cleanup-review.mjs';
+import { isDesktop, revealInExplorer, saveFileNative } from './desktop-bridge.mjs';
 
 export default function CleanupAnalysis({ vaultId, workspace, items, decisions, scan, scanning }) {
   const [pack, setPack] = useState(null);
@@ -7,10 +8,11 @@ export default function CleanupAnalysis({ vaultId, workspace, items, decisions, 
   const [progress, setProgress] = useState(null);
   const [error, setError] = useState('');
   const [status, setStatus] = useState('');
+  const [savedPath, setSavedPath] = useState('');
   const request = useRef(null);
   useEffect(() => {
     request.current?.abort();
-    setPack(null); setPreparing(false); setProgress(null); setError(''); setStatus('');
+    setPack(null); setPreparing(false); setProgress(null); setError(''); setStatus(''); setSavedPath('');
     return () => request.current?.abort();
   }, [vaultId, workspace, items, decisions, scanning]);
 
@@ -48,6 +50,18 @@ export default function CleanupAnalysis({ vaultId, workspace, items, decisions, 
     try { await navigator.clipboard.writeText(analysisPrompt); setStatus('Companion prompt copied. Paste it with the AI analysis JSON.'); }
     catch { setStatus('Could not copy automatically. Select the companion prompt below and copy it manually.'); }
   }
+  async function saveNative() {
+    if (!pack) return;
+    try {
+      const res = await saveFileNative('axiom-cleanup-analysis.json', pack.json);
+      if (res?.saved) {
+        setSavedPath(res.path || '');
+        setStatus(`Saved AI analysis pack to ${res.path}.`);
+      }
+    } catch (e) {
+      setStatus(e.message || 'Could not save AI analysis pack.');
+    }
+  }
 
   return <section className="cleanup-analysis" aria-labelledby="cleanup-analysis-title">
     <h2 id="cleanup-analysis-title">Let a model assess all proposals</h2>
@@ -59,7 +73,7 @@ export default function CleanupAnalysis({ vaultId, workspace, items, decisions, 
     {status && <p role="status">{status}</p>}
     {pack && <div className="cleanup-handoff">
       <p>{pack.suggestionCount} proposals · {pack.sourceCount} unique full sources · {(pack.bytes / 1024).toFixed(1)} KiB</p>
-      <div className="cleanup-analysis-actions"><button type="button" className="button button-primary" onClick={copy}>Copy AI pack</button><a className="button" download="axiom-cleanup-analysis.json" href={'data:application/json;charset=utf-8,' + encodeURIComponent(pack.json)}>Download AI pack</a></div>
+      <div className="cleanup-analysis-actions"><button type="button" className="button button-primary" onClick={copy}>Copy AI pack</button>{isDesktop() ? <button type="button" className="button" onClick={saveNative}>Save AI pack to file</button> : <a className="button" download="axiom-cleanup-analysis.json" href={'data:application/json;charset=utf-8,' + encodeURIComponent(pack.json)}>Download AI pack</a>}{savedPath && <button type="button" className="button" onClick={() => revealInExplorer('file', savedPath)}>Reveal in Explorer</button>}</div>
       <label htmlFor="cleanup-analysis-prompt">Prompt to send with the JSON</label><textarea id="cleanup-analysis-prompt" readOnly value={analysisPrompt} onFocus={event => event.target.select()} />
       <div className="cleanup-analysis-actions"><button type="button" className="button" onClick={copyPrompt}>Copy prompt</button></div>
       <label htmlFor="cleanup-analysis-json">AI analysis JSON (select and copy if needed)</label><textarea id="cleanup-analysis-json" readOnly value={pack.json} onFocus={event => event.target.select()} />

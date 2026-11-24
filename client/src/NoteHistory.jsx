@@ -1,4 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
+import { useConfirm } from './ConfirmDialog.jsx';
+import { apiMutate } from './desktop-bridge.mjs';
 import './NoteHistory.css';
 
 async function request(url, options = {}) {
@@ -19,6 +21,7 @@ export default function NoteHistory({ note, onRestored }) {
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
   const [restoring, setRestoring] = useState(false);
+  const { confirm, dialog } = useConfirm();
   const [reload, setReload] = useState(0);
   const identity = useRef({ path: note.path, revision: note.revision, generation: 0 });
   const mounted = useRef(true);
@@ -68,17 +71,19 @@ export default function NoteHistory({ note, onRestored }) {
 
   const restore = async () => {
     if (!preview || restoring || preview.currentRevision !== note.revision) return;
-    if (!window.confirm('Restore this archived version? The current note will be archived first. Restoring bytes identical to a previously approved revision may regain its existing review status; the review ledger itself is unchanged.')) return;
+    const confirmed = await confirm({
+      title: 'Restore archived version',
+      message: 'Restore this archived version? The current note will be archived first. Restoring bytes identical to a previously approved revision may regain its existing review status; the review ledger itself is unchanged.',
+      confirmLabel: 'Restore version',
+    });
+    if (!confirmed) return;
     const generation = identity.current.generation;
     const current = () => mounted.current && identity.current.generation === generation;
     setRestoring(true); setError('');
     try {
-      const session = await request('/api/editor-session');
-      if (!current()) return;
-      if (!session.token) throw new Error('Could not start a secure editor session.');
-      const result = await request('/api/note-history/restore', {
-        method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Shared-Brain-CSRF': session.token },
-        body: JSON.stringify({ path: note.path, id: preview.id, expectedRevision: note.revision }),
+      const result = await apiMutate('/api/note-history/restore', {
+        method: 'POST',
+        body: { path: note.path, id: preview.id, expectedRevision: note.revision },
       });
       if (!current()) return;
       setPreview(null); setReload(value => value + 1);
@@ -89,6 +94,7 @@ export default function NoteHistory({ note, onRestored }) {
   };
 
   return <section className="note-history" aria-label="Revision history">
+    {dialog}
     <button type="button" className="history-toggle" aria-expanded={open} onClick={() => setOpen(value => !value)}>Revision history {open ? '−' : '+'}</button>
     {open && <div className="history-body">
       <p>Archived versions are separate from the reviewed diff. Changes made outside Axiom may not be archived.</p>

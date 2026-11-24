@@ -1,6 +1,7 @@
 .workspace-graph { min-width: 0; }
 .workspace-graph .graph-toolbar { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
-.workspace-graph .graph-search { display: flex; align-items: center; gap: 8px; flex: 1 1 180px; min-width: 130px; padding: 9px 11px; border: 1px solid var(--border); border-radius: 9px; color: var(--muted); background: var(--surface-inset); }
+.workspace-graph .graph-search { display: flex; align-items: center; gap: 8px; flex: 1 1 180px; min-width: 130px; padding: 9px 11px; border: 1px solid var(--border-control); border-radius: 9px; color: var(--muted); background: var(--surface-inset); }
+.workspace-graph .graph-search:focus-within { border-color: var(--accent); outline: 2px solid var(--accent-bright); outline-offset: 2px; }
 .workspace-graph .graph-search input { width: 100%; min-width: 0; color: var(--fg); border: 0; outline: 0; background: transparent; }
 .workspace-graph .graph-filter { display: inline-flex; gap: 5px; align-items: center; color: var(--fg-secondary); font-size: 12px; white-space: nowrap; }
 .workspace-graph .graph-filter input { accent-color: var(--accent); }
@@ -9,6 +10,10 @@
 .workspace-graph button:hover, .workspace-graph .graph-list li > a:hover { border-color: var(--accent-border); color: var(--accent-bright); }
 .workspace-graph .graph-controls button, .workspace-graph .graph-list li > a { display: grid; place-items: center; }
 .workspace-graph .graph-summary { color: var(--muted); font-size: 12px; margin: 12px 0; }
+.workspace-graph .graph-legend { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 12px; }
+.workspace-graph .graph-legend-item { display: inline-flex; align-items: center; gap: 6px; padding: 4px 9px; border: 1px solid var(--border); border-radius: 999px; background: var(--surface); color: var(--fg-secondary); font-size: 11px; cursor: pointer; }
+.workspace-graph .graph-legend-item[aria-pressed="true"] { border-color: var(--accent-border); background: var(--accent-surface); color: var(--accent-bright); }
+.workspace-graph .graph-legend-dot { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; }
 .workspace-graph .graph-main { display: grid; grid-template-columns: minmax(0, 1fr) 220px; border: 1px solid var(--border); border-radius: 12px; overflow: hidden; background: var(--surface-inset); }
 .workspace-graph .graph-canvas { display: block; width: 100%; height: clamp(460px, 65vh, 800px); min-width: 0; touch-action: none; cursor: grab; background-image: radial-gradient(var(--border) 0.7px, transparent 0.7px); background-size: 24px 24px; }
 .workspace-graph .graph-canvas:active { cursor: grabbing; }
@@ -38,3 +43,5 @@
 .workspace-graph .graph-empty { padding: 28px; color: var(--muted); border: 1px solid var(--border); border-radius: 12px; }
 .workspace-graph .graph-sr { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
 @media (max-width: 700px) { .workspace-graph .graph-main { grid-template-columns: 1fr; } .workspace-graph .graph-canvas { height: 55vh; min-height: 360px; } .workspace-graph .graph-inspector { max-height: 260px; border-left: 0; border-top: 1px solid var(--border); } }
+@container split (max-width: 680px) { .workspace-graph .graph-main { grid-template-columns: 1fr; } .workspace-graph .graph-canvas { height: 420px; min-height: 320px; } .workspace-graph .graph-inspector { max-height: 260px; border-left: 0; border-top: 1px solid var(--border); } }
+@container content (max-width: 680px) { .workspace-graph .graph-main { grid-template-columns: 1fr; } .workspace-graph .graph-canvas { height: 420px; min-height: 320px; } .workspace-graph .graph-inspector { max-height: 260px; border-left: 0; border-top: 1px solid var(--border); } }

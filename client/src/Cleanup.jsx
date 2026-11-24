@@ -2,6 +2,7 @@ import React, { useEffect, useRef, useState } from 'react';
 import { ScanSearch, Trash2 } from 'lucide-react';
 import { DeleteNote } from './Management.jsx';
 import { decisionKey, readDecisions, writeDecisions, buildHandoff } from './cleanup-review.mjs';
+import { isDesktop, readBucketState, revealInExplorer, saveFileNative, writeBucketState } from './desktop-bridge.mjs';
 import CleanupReview from './CleanupReview.jsx';
 import CleanupAnalysis from './CleanupAnalysis.jsx';
 import './Cleanup.css';
@@ -45,17 +46,48 @@ export default function Cleanup({ groups, vaultId, onCatalogChanged }) {
   const [expanded, setExpanded] = useState(null);
   const [handoff, setHandoff] = useState('');
   const [copyStatus, setCopyStatus] = useState('');
+  const [savedFilePath, setSavedFilePath] = useState('');
   useEffect(() => {
+    let active = true;
+    const key = vaultId ? `decisions-${vaultId}` : null;
+    if (key) {
+      readBucketState('cleanup', key, () => null).then(raw => {
+        if (!active || !raw) return;
+        try {
+          const parsed = JSON.parse(raw);
+          if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+            setDecisions(parsed);
+            setStorageError('');
+          }
+        } catch {}
+      }).catch(() => {});
+    }
     try { setDecisions(readDecisions(window.localStorage, vaultId)); setStorageError(''); }
     catch { setDecisions({}); setStorageError('Browser storage is unavailable for this vault. Decisions remain in this session only.'); }
+    return () => { active = false; };
   }, [vaultId]);
   function updateDecision(item, changes) {
     const key = decisionKey(item);
     const next = { ...decisions, [key]: { decision: 'undecided', instructions: '', targetPath: null, ...decisions[key], ...changes, updatedAt: new Date().toISOString() } };
     setDecisions(next);
+    if (vaultId) {
+      writeBucketState('cleanup', `decisions-${vaultId}`, JSON.stringify(next)).catch(() => {});
+    }
     try { writeDecisions(window.localStorage, vaultId, next); setStorageError(''); }
-    catch { setStorageError('Browser storage is unavailable for this vault. Decisions remain in this session only.'); }
+    catch { if (!isDesktop()) setStorageError('Browser storage is unavailable for this vault. Decisions remain in this session only.'); }
     setHandoff('');
+  }
+  async function saveHandoffNative() {
+    try {
+      const json = handoff || exportHandoff();
+      const res = await saveFileNative('cleanup-handoff.json', json);
+      if (res?.saved) {
+        setSavedFilePath(res.path || '');
+        setCopyStatus(`Saved handoff to ${res.path}.`);
+      }
+    } catch (e) {
+      setCopyStatus(e.message || 'Could not save handoff file.');
+    }
   }
   function exportHandoff() {
     const report = buildHandoff({ vaultId, workspace, items, decisions, generatedAt: new Date().toISOString() });
@@ -124,7 +156,7 @@ export default function Cleanup({ groups, vaultId, onCatalogChanged }) {
         <button type="button" className="button button-primary" onClick={copyHandoff} disabled={busy || !vaultId}>Copy JSON handoff</button>
       </div>
       <p className="cleanup-meta">The handoff contains private paths and evidence. Share it only with a trusted agent. It does not execute changes.</p>
-      {handoff && <div className="cleanup-handoff"><label htmlFor="cleanup-handoff-json">Handoff JSON (select and copy if needed)</label><textarea id="cleanup-handoff-json" readOnly value={handoff} onFocus={e => e.target.select()} /><a className="button" download="cleanup-handoff.json" href={'data:application/json;charset=utf-8,' + encodeURIComponent(handoff)}>Download JSON</a><p role="status">{copyStatus}</p></div>}
+      {handoff && <div className="cleanup-handoff"><label htmlFor="cleanup-handoff-json">Handoff JSON (select and copy if needed)</label><textarea id="cleanup-handoff-json" readOnly value={handoff} onFocus={e => e.target.select()} /><div className="cleanup-analysis-actions">{isDesktop() ? <button type="button" className="button" onClick={saveHandoffNative}>Save JSON to file</button> : <a className="button" download="cleanup-handoff.json" href={'data:application/json;charset=utf-8,' + encodeURIComponent(handoff)}>Download JSON</a>}{savedFilePath && <button type="button" className="button" onClick={() => revealInExplorer('file', savedFilePath)}>Reveal in Explorer</button>}</div><p role="status">{copyStatus}</p></div>}
       <CleanupAnalysis vaultId={vaultId} workspace={workspace} items={items} decisions={decisions} scan={result} scanning={busy} />
       <p className="cleanup-meta" role="status">Scanned {result.scannedNotes.toLocaleString()} notes · {new Date(result.scannedAt).toLocaleString()}</p>
       {result.semantic && !semanticError && phase !== 'semantic' && <p className="cleanup-meta" role="status">{semanticSummary(result.semantic)}{result.semantic.state !== 'not-requested' && (result.semantic.incomplete || result.semantic.state === 'incomplete' || result.semantic.state === 'unavailable' || result.semantic.state === 'error') ? ' Lexical results remain available.' : ''}</p>}
