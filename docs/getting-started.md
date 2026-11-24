@@ -96,4 +96,12 @@ Ollama selects available GPU acceleration. Axiom requests a 2,048-token context,
 ./scripts/start.ps1 -Register -Open
 ```
 
-This starts the application, registers current-user automatic startup and opens the browser. Use the URL reported by the launcher; the configured port may differ from the example. For supervision, recovery and security details, see [operations](operations.md).
+This installs the native Claude Code hooks, omp extension wrapper, and (on Windows, when a Velopack installer is available locally in `Releases/` or via GitHub Releases) the Axiom desktop application into `%LOCALAPPDATA%/AxiomDesktop`. Pass `--skip-desktop` to install only agent integrations.
+
+To pack or publish the self-contained Velopack desktop installer locally:
+
+```powershell
+npm run desktop:pack
+npm run desktop:install
+npm run desktop:release
+```

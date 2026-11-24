@@ -26,7 +26,10 @@
     "desktop:build": "tauri build",
     "desktop:check": "cargo check --manifest-path src-tauri/Cargo.toml",
     "desktop:test": "cargo test --manifest-path src-tauri/Cargo.toml",
-    "desktop:icons": "python scripts/build-icons.py"
+    "desktop:icons": "python scripts/build-icons.py",
+    "desktop:pack": "pwsh -NoProfile -File scripts/pack-desktop.ps1",
+    "desktop:install": "pwsh -NoProfile -File scripts/pack-desktop.ps1 -Install",
+    "desktop:release": "pwsh -NoProfile -File scripts/pack-desktop.ps1 -Publish"
   },
   "dependencies": {
     "@codemirror/lang-markdown": "6.5.2",

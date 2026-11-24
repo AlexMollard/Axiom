@@ -4,15 +4,24 @@ import os from 'node:os';
 import {randomUUID} from 'node:crypto';
 import {fileURLToPath, pathToFileURL} from 'node:url';
 import {loadConfig, policies} from '../src/memory.mjs';
+import {installDesktopApp} from './desktop-installer.mjs';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const args = process.argv.slice(2);
 let previousRoot;
-if (args.length) {
-  if (args.length !== 2 || args[0] !== '--previous-root' || !path.isAbsolute(args[1])) {
-    throw new Error('Usage: node scripts/install.mjs [--previous-root <absolute old app root>]');
+let skipDesktop = false;
+for (let i = 0; i < args.length; i++) {
+  if (args[i] === '--skip-desktop') {
+    skipDesktop = true;
+  } else if (args[i] === '--previous-root') {
+    const next = args[++i];
+    if (!next || !path.isAbsolute(next)) {
+      throw new Error('Usage: node scripts/install.mjs [--previous-root <absolute old app root>] [--skip-desktop]');
+    }
+    previousRoot = path.resolve(next);
+  } else {
+    throw new Error('Usage: node scripts/install.mjs [--previous-root <absolute old app root>] [--skip-desktop]');
   }
-  previousRoot = path.resolve(args[1]);
 }
 const config = await loadConfig();
 await policies(config, process.cwd());
@@ -87,5 +96,13 @@ const target = path.join(root, 'integrations', 'omp.ts');
 const relative = path.relative(path.dirname(extension), target);
 const specifier = path.isAbsolute(relative) ? pathToFileURL(target).href : normalize(relative.startsWith('.') ? relative : './' + relative);
 await replaceFile(extension, `export {default} from ${JSON.stringify(specifier)};\r\n`);
-await replaceFile(path.join(snapshot, 'installation-report.json'), JSON.stringify({created: new Date().toISOString(), snapshot, saved}, null, 2).replace(/\r?\n/g, '\r\n') + '\r\n');
+const desktop = await installDesktopApp({root, skipFlag: skipDesktop});
+await replaceFile(path.join(snapshot, 'installation-report.json'), JSON.stringify({created: new Date().toISOString(), snapshot, saved, desktop}, null, 2).replace(/\r?\n/g, '\r\n') + '\r\n');
 console.log(`Axiom integrations installed. Rollback copies: ${snapshot}`);
+if (desktop.status === 'installed') {
+  console.log(`Axiom desktop app installed (${desktop.source}) in ${desktop.installDir}`);
+} else if (desktop.status === 'unavailable') {
+  console.log(`Axiom desktop app skipped (${desktop.reason}). Run "npm run desktop:pack" or "npm run desktop:release" to package an installer.`);
+} else if (desktop.status === 'skipped' && skipDesktop) {
+  console.log(`Axiom desktop app skipped (${desktop.reason}).`);
+}
