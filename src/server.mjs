@@ -22,14 +22,15 @@ import {embeddingStatus} from './embeddings.mjs';
 import {getNoteHistory, getNoteHistoryRevision, restoreNoteHistoryFromEditor} from './note-history.mjs';
 import {headingSlug, resolveNote} from './note-links.mjs';
 import {getCleanup} from './cleanup.mjs';
+import {createEventHub} from './live-events.mjs';
 
 const buildDir = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'dist');
-const assetTypes = { '.js': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8', '.woff2': 'font/woff2', '.txt': 'text/plain; charset=utf-8' };
+const assetTypes = { '.js': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8', '.woff2': 'font/woff2', '.txt': 'text/plain; charset=utf-8', '.png': 'image/png' };
 const headers = {
   'Cache-Control': 'no-store',
   'X-Content-Type-Options': 'nosniff',
   'Referrer-Policy': 'no-referrer',
-  'Content-Security-Policy': "default-src 'none'; script-src 'self'; style-src 'self'; font-src 'self'; img-src 'self' data:; connect-src 'self'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'",
+  'Content-Security-Policy': "default-src 'none'; script-src 'self'; style-src 'self'; font-src 'self'; img-src 'self' data:; connect-src 'self' ipc: http://ipc.localhost; base-uri 'none'; form-action 'none'; frame-ancestors 'none'",
 };
 
 function noteHref(note, target, wiki = false) {
@@ -120,6 +121,7 @@ async function readJson(req) {
 
 export function createServer(config, configId = null) {
   const csrf = randomBytes(32);
+  const events = createEventHub(config);
   const allowedHosts = new Set([`127.0.0.1:${config.port}`, `localhost:${config.port}`]);
   const server = http.createServer(async (req, res) => {
     const send = (status, type, body, extra = {}) => {
@@ -208,13 +210,17 @@ export function createServer(config, configId = null) {
         catch (error) { if (error.code !== 'ENOENT') throw error; return json(503, { error: 'Frontend build is missing. Run npm run build.' }); }
         return send(200, 'text/html; charset=utf-8', html.replaceAll('__STYLE_NONCE__', nonce), { 'Content-Security-Policy': headers['Content-Security-Policy'].replace("style-src 'self'", `style-src 'self' 'nonce-${nonce}'`) });
       }
-      if (/^\/assets\/[a-zA-Z0-9_.-]+$/.test(url.pathname) || /^\/licenses\/(?:Manrope|JetBrains-Mono)-OFL\.txt$/.test(url.pathname)) {
+      if (/^\/assets\/[a-zA-Z0-9_.-]+$/.test(url.pathname) || /^\/licenses\/(?:Manrope|JetBrains-Mono)-OFL\.txt$/.test(url.pathname) || url.pathname === '/axiom-icon.png') {
         const type = assetTypes[path.extname(url.pathname)];
         if (!type) return json(404, { error: 'Not found' });
         const hashed = /^\/assets\/[a-zA-Z0-9_.-]+-[a-zA-Z0-9_-]{8}\.(?:js|css|woff2)$/.test(url.pathname);
         return send(200, type, await readFile(path.join(buildDir, url.pathname.slice(1))), hashed ? { 'Cache-Control': 'public, max-age=31536000, immutable' } : {});
       }
-      if (url.pathname === '/health') return json(200, configId ? { ok: true, pid: process.pid, configId, uptimeSeconds: process.uptime() } : { ok: true });
+      if (url.pathname === '/health') return json(200, configId ? { ok: true, apiVersion: 2, pid: process.pid, configId, uptimeSeconds: process.uptime() } : { ok: true, apiVersion: 2 });
+      if (url.pathname === '/api/events') {
+        if (req.method !== 'GET') { res.setHeader('Allow', 'GET'); return json(405, { error: 'Method not allowed' }); }
+        return events.handleRequest(req, res, headers);
+      }
       if (url.pathname === '/api/catalog') {
         const { assignments: workspaceIcons } = await readWorkspaceIcons(config);
         const workspaceNames = {global: config.workspaceNames?.global || 'General', __unmapped: config.workspaceNames?.__unmapped || 'Unmapped', ...Object.fromEntries(config.projects.map(({id, name}) => [id, name || id]))};
@@ -270,7 +276,14 @@ export function createServer(config, configId = null) {
       allowedHosts.add(`localhost:${address.port}`);
     }
   });
-  server.requestTimeout = 60000;
+  const closeEvents = () => events.close();
+  server.on('close', closeEvents);
+  const originalClose = server.close.bind(server);
+  server.close = callback => {
+    closeEvents();
+    return originalClose(callback);
+  };
+  server.requestTimeout = 90000;
   server.headersTimeout = 15000;
   return server;
 }
