@@ -1,0 +1,31 @@
+fn main() {
+    tauri_build::try_build(
+        tauri_build::Attributes::new().app_manifest(
+            tauri_build::AppManifest::new().commands(&[
+                "desktop_info",
+                "desktop_backend_status",
+                "desktop_restart_backend",
+                "desktop_trigger_backup",
+                "desktop_get_prefs",
+                "desktop_save_prefs",
+                "desktop_read_state",
+                "desktop_write_state",
+                "desktop_delete_state",
+                "desktop_save_file",
+                "desktop_open_in_obsidian",
+                "desktop_open_in_vscode",
+                "desktop_reveal_in_explorer",
+                "desktop_open_in_browser",
+                "desktop_notify",
+                "desktop_set_tray_state",
+                "desktop_open_note_window",
+                "desktop_toggle_quick_overlay",
+                "desktop_focus_main_route",
+                "desktop_hide_quick_overlay",
+                "desktop_set_dirty_tabs",
+                "desktop_quit",
+            ]),
+        ),
+    )
+    .expect("failed to run tauri-build");
+}

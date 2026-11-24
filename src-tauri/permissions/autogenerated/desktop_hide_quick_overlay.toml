@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-desktop-hide-quick-overlay"
+description = "Enables the desktop_hide_quick_overlay command without any pre-configured scope."
+commands.allow = ["desktop_hide_quick_overlay"]
+
+[[permission]]
+identifier = "deny-desktop-hide-quick-overlay"
+description = "Denies the desktop_hide_quick_overlay command without any pre-configured scope."
+commands.deny = ["desktop_hide_quick_overlay"]

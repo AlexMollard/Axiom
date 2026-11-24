@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-desktop-write-state"
+description = "Enables the desktop_write_state command without any pre-configured scope."
+commands.allow = ["desktop_write_state"]
+
+[[permission]]
+identifier = "deny-desktop-write-state"
+description = "Denies the desktop_write_state command without any pre-configured scope."
+commands.deny = ["desktop_write_state"]
