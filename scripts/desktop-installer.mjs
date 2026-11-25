@@ -30,6 +30,19 @@ export function shouldSkipDesktopInstall({
   return {skip: false, reason: ''};
 }
 
+export function detectInstalledDesktop({
+  env = process.env,
+  homeDir = os.homedir(),
+} = {}) {
+  const installDir = path.join(env.LOCALAPPDATA || path.join(homeDir, 'AppData', 'Local'), 'AxiomDesktop');
+  const exePath = path.join(installDir, 'current', 'axiom.exe');
+  return {
+    installed: fs.existsSync(exePath),
+    installDir,
+    exePath,
+  };
+}
+
 export function findLocalDesktopInstaller(root) {
   const releasesDir = path.join(root, 'Releases');
   if (!fs.existsSync(releasesDir)) return null;
@@ -67,7 +80,17 @@ export async function downloadLatestDesktopInstaller(
     }
   }
 
-  const token = (env.AXIOM_GITHUB_TOKEN || env.GITHUB_TOKEN || env.GH_TOKEN || '').trim();
+  let token = (env.AXIOM_GITHUB_TOKEN || env.GITHUB_TOKEN || env.GH_TOKEN || '').trim();
+  if (!token) {
+    const authRes = spawnSync('gh', ['auth', 'token'], {
+      env,
+      encoding: 'utf8',
+      windowsHide: true,
+    });
+    if (authRes.status === 0 && authRes.stdout) {
+      token = authRes.stdout.trim();
+    }
+  }
   const apiHeaders = {
     Accept: 'application/vnd.github+json',
     'User-Agent': 'Axiom-Installer',
@@ -158,6 +181,7 @@ export async function installDesktopApp({
     }
   }
 
+  const before = detectInstalledDesktop({env, homeDir});
   try {
     const result = runInstaller(setupPath);
     if (result.error) {
@@ -169,12 +193,12 @@ export async function installDesktopApp({
         `Desktop installer exited with code ${result.status}${detail ? `: ${detail}` : ''}`,
       );
     }
-    const localAppData = env.LOCALAPPDATA || path.join(homeDir, 'AppData', 'Local');
     return {
       status: 'installed',
       source,
       setupPath,
-      installDir: path.join(localAppData, 'AxiomDesktop'),
+      installDir: before.installDir,
+      upgraded: before.installed,
     };
   } finally {
     if (cleanupDir) {

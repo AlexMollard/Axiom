@@ -10,7 +10,8 @@ param(
   [string]$Channel,
   [switch]$PreRelease,
   [switch]$NoPortable,
-  [switch]$NoDelta
+  [switch]$NoDelta,
+  [switch]$Clean
 )
 $ErrorActionPreference = 'Stop'
 
@@ -94,6 +95,24 @@ try {
 
   $resolvedOutDir = if ([IO.Path]::IsPathRooted($OutputDir)) { $OutputDir } else { Join-Path $root $OutputDir }
   New-Item -ItemType Directory -Path $resolvedOutDir -Force | Out-Null
+
+  $shouldClean = [bool]$Clean
+  if (-not $shouldClean -and $NoDelta) {
+    $releaseManifests = Get-ChildItem -LiteralPath $resolvedOutDir -Filter 'releases*.json' -File -ErrorAction SilentlyContinue
+    foreach ($manifestFile in $releaseManifests) {
+      try {
+        $manifestJson = Get-Content -LiteralPath $manifestFile.FullName -Raw | ConvertFrom-Json
+        if ($manifestJson.Assets | Where-Object { $_.Version -eq $version }) {
+          $shouldClean = $true
+          break
+        }
+      } catch {}
+    }
+  }
+  if ($shouldClean) {
+    Write-Output "Cleaning stale Velopack release artifacts in $resolvedOutDir..."
+    Get-ChildItem -LiteralPath $resolvedOutDir -Force -ErrorAction SilentlyContinue | Remove-Item -Recurse -Force
+  }
 
   if (-not $NoDelta -and $token) {
     Write-Output 'Hydrating previous GitHub release assets for delta generation...'

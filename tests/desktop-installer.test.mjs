@@ -4,6 +4,7 @@ import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import {
+  detectInstalledDesktop,
   findLocalDesktopInstaller,
   installDesktopApp,
   shouldSkipDesktopInstall,
@@ -44,6 +45,26 @@ test('installDesktopApp prefers local Releases installer and reports failures cl
   assert.equal(ok.status, 'installed');
   assert.equal(ok.source, 'local');
   assert.equal(ok.installDir, path.join('C:\\Users\\alex\\AppData\\Local', 'AxiomDesktop'));
+  assert.equal(ok.upgraded, false);
+
+  const localAppData = path.join(root, 'LocalAppData');
+  const existingExe = path.join(localAppData, 'AxiomDesktop', 'current', 'axiom.exe');
+  await fs.mkdir(path.dirname(existingExe), {recursive: true});
+  await fs.writeFile(existingExe, 'existing');
+  assert.deepEqual(detectInstalledDesktop({env: {LOCALAPPDATA: localAppData}, homeDir: root}), {
+    installed: true,
+    installDir: path.join(localAppData, 'AxiomDesktop'),
+    exePath: existingExe,
+  });
+  const upgraded = await installDesktopApp({
+    root,
+    platform: 'win32',
+    env: {LOCALAPPDATA: localAppData},
+    homeDir: root,
+    tmpDir: 'C:\\Other\\Temp',
+    runInstaller: () => ({status: 0, stdout: '', stderr: ''}),
+  });
+  assert.equal(upgraded.upgraded, true);
 
   await assert.rejects(
     () =>
