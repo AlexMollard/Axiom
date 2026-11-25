@@ -1,4 +1,4 @@
-import { catalog, readNote, projectFor, search } from './memory.mjs';
+import { catalog, catalogWithContent, readNote, readNotes, projectFor, search } from './memory.mjs';
 import {resolveNote} from './note-links.mjs';
 
 const recent = (a, b) => b.updated.localeCompare(a.updated) || a.path.localeCompare(b.path);
@@ -6,17 +6,6 @@ function workspaceNotes(config, id, notes) {
   const ids = new Set(config.projects.map(project => project.id));
   if (id !== 'global' && id !== '__unmapped' && !ids.has(id)) throw Object.assign(new Error('Unknown workspace.'), { status: 400 });
   return notes.filter(note => id === '__unmapped' ? note.project !== 'global' && !ids.has(note.project) : note.project === id);
-}
-async function loadContents(config, notes) {
-  const result = new Array(notes.length);
-  let cursor = 0;
-  await Promise.all(Array.from({ length: Math.min(12, notes.length) }, async () => {
-    while (cursor < notes.length) {
-      const index = cursor++;
-      result[index] = await readNote(config, notes[index].path);
-    }
-  }));
-  return result;
 }
 function contentParts(content) {
   const front = content.match(/^---\r?\n([\s\S]*?)\r?\n---(?:\r?\n|$)/);
@@ -39,8 +28,7 @@ function isProposal(note, fields) {
 }
 
 export async function getWorkspaceOverview(config, id) {
-  const selected = workspaceNotes(config, id, await catalog(config));
-  const full = await loadContents(config, selected);
+  const full = workspaceNotes(config, id, await catalogWithContent(config));
   const notes = full.map(({ content, ...note }) => note).sort(recent);
   const byPath = new Map(notes.map(note => [note.path, note]));
   const pins = (Array.isArray(config.workspacePins?.[id]) ? config.workspacePins[id] : []).map(path => ({ path, note: byPath.get(path) || null, stale: !byPath.has(path) }));
@@ -58,18 +46,19 @@ export async function getWorkspaceOverview(config, id) {
 }
 
 export async function getMemoryHealth(config, renderMarkdown) {
-  const allNotes = await catalog(config);
-  const notes = await loadContents(config, allNotes);
+  const notes = await catalogWithContent(config);
+  const allNotes = notes.map(({ content, ...note }) => note);
   const configured = new Set(config.projects.map(project => project.id));
   const ambiguous = [], brokenLinks = [], conflicts = [], missingSources = [], superseded = [], possibleOverlaps = [];
   const titles = new Map();
-  for (const note of notes) {
-    const { content, ...summary } = note;
-    const { fields, body } = contentParts(content);
+  for (let i = 0; i < notes.length; i++) {
+    const note = notes[i];
+    const summary = allNotes[i];
+    const { fields, body } = contentParts(note.content);
     const active = !['archived', 'superseded'].includes((note.status || '').toLowerCase());
     if (active && note.project !== 'global' && !configured.has(note.project)) ambiguous.push(summary);
-    const graph = { targets: new Set(), unresolvedCount: 0 };
-    renderMarkdown(content, note.path, allNotes, graph);
+    const graph = { targets: new Set(), unresolvedCount: 0, linksOnly: true };
+    renderMarkdown(note.content, note.path, allNotes, graph);
     if (active && graph.unresolvedCount) brokenLinks.push({ note: summary, count: graph.unresolvedCount });
     const conflict = note.conflictsWith || fields.conflicts_with;
     if (active && meaningful(conflict)) conflicts.push({ note: summary, reference: conflict });
@@ -136,7 +125,7 @@ async function overlapCandidates(config, project, title, body, exclude) {
   found.sort((a, b) => b.score - a.score || a.path.localeCompare(b.path));
   const selected = found.slice(0, MAX_CANDIDATES);
   const partial = results.some(result => result.hasMore) || found.length > selected.length;
-  const full = await loadContents(config, selected);
+  const full = await readNotes(config, selected.map(item => item.path));
   const notes = full.map((note, index) => selected[index].revision === note.revision && selected[index].semanticScore !== undefined ? {...note, semanticScore: selected[index].semanticScore} : note);
   const degraded = results.map(result => result.semantic).filter(status => status?.enabled && !['ready', 'sleeping'].includes(status.state));
   return {notes, semantic: degraded[0] || results[0]?.semantic,

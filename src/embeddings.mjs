@@ -1,14 +1,16 @@
 import * as fs from 'node:fs/promises';
+import os from 'node:os';
 import path from 'node:path';
 import {createHash} from 'node:crypto';
 import MarkdownIt from 'markdown-it';
 import {headingSlug} from './note-links.mjs';
 
+const IS_LE = os.endianness() === 'LE';
 // Cache keys contain no note paths or text. Changes to formatting invalidate every vector.
 const VERSION = 'qwen3-retrieval-chunks-v3';
-const MAX_ROWS = 16384, MAX_CHUNKS = 16000, MAX_CORPUS_BYTES = 32 * 1024 * 1024;
+const MAX_ROWS = 16384, MAX_CHUNKS = 16000, MAX_CORPUS_BYTES = 32 * 1024 * 1024, MAX_CHUNK_CACHE = 4096;
 const MAX_QUERY_BYTES = 1800, BATCH = 32, MAX_QUEUE = 16;
-const jobs = new Map(), queryCache = new Map();
+const jobs = new Map(), queryCache = new Map(), chunkCache = new Map();
 const markdown = new MarkdownIt({html: false});
 const hash = text => createHash('sha256').update(text).digest('hex');
 const cachePath = config => path.join(path.dirname(config.configPath || config.vault), '.state', 'embeddings.sqlite');
@@ -43,21 +45,51 @@ async function openCache(config) {
   } catch (error) { db.close(); throw error; }
 }
 function count(db, settings) { return Number(db.prepare("SELECT count(*) AS n FROM vectors WHERE fingerprint = ? AND hash NOT LIKE 'q:%'").get(settings.fingerprint).n); }
+function decodeVector(rawBytes, dimensions) {
+  if (!rawBytes || rawBytes.byteLength !== dimensions * 4) return null;
+  let vector;
+  if (IS_LE) {
+    const aligned = new Uint8Array(dimensions * 4);
+    aligned.set(new Uint8Array(rawBytes.buffer, rawBytes.byteOffset, dimensions * 4));
+    vector = new Float32Array(aligned.buffer);
+  } else {
+    const bytes = Buffer.from(rawBytes);
+    vector = new Float32Array(dimensions);
+    for (let i = 0; i < dimensions; i++) vector[i] = bytes.readFloatLE(i * 4);
+  }
+  for (let i = 0; i < vector.length; i++) if (!Number.isFinite(vector[i])) return null;
+  return vector;
+}
+function encodeVector(vector) {
+  if (IS_LE) return Buffer.from(vector.buffer, vector.byteOffset, vector.byteLength);
+  const bytes = Buffer.allocUnsafe(vector.length * 4);
+  for (let i = 0; i < vector.length; i++) bytes.writeFloatLE(vector[i], i * 4);
+  return bytes;
+}
 function loadVector(db, settings, key) {
   const row = db.prepare('SELECT vector FROM vectors WHERE fingerprint = ? AND hash = ?').get(settings.fingerprint, key);
-  if (!row || row.vector.byteLength !== settings.dimensions * 4) return null;
-  const bytes = Buffer.from(row.vector), vector = new Float32Array(settings.dimensions);
-  for (let i = 0; i < vector.length; i++) { vector[i] = bytes.readFloatLE(i * 4); if (!Number.isFinite(vector[i])) return null; }
-  return vector;
+  return decodeVector(row?.vector, settings.dimensions);
+}
+function loadVectorsBatch(db, settings, keys) {
+  const uniqueKeys = [...new Set(keys)];
+  const result = new Map();
+  for (let i = 0; i < uniqueKeys.length; i += 500) {
+    const slice = uniqueKeys.slice(i, i + 500);
+    const placeholders = slice.map(() => '?').join(',');
+    const rows = db.prepare(`SELECT hash, vector FROM vectors WHERE fingerprint = ? AND hash IN (${placeholders})`).all(settings.fingerprint, ...slice);
+    for (const row of rows) {
+      const vector = decodeVector(row.vector, settings.dimensions);
+      if (vector) result.set(row.hash, vector);
+    }
+  }
+  return result;
 }
 function storeVectors(db, settings, records) {
   const insert = db.prepare('INSERT OR REPLACE INTO vectors(fingerprint, hash, vector, touched) VALUES (?, ?, ?, ?)');
   db.exec('BEGIN IMMEDIATE');
   try {
     for (const [key, vector] of records) {
-      const bytes = Buffer.allocUnsafe(vector.length * 4);
-      for (let i = 0; i < vector.length; i++) bytes.writeFloatLE(vector[i], i * 4);
-      insert.run(settings.fingerprint, key, bytes, Date.now());
+      insert.run(settings.fingerprint, key, encodeVector(vector), Date.now());
     }
     // Bound both row count and vector payload, including vectors from older fingerprints.
     db.exec(`DELETE FROM vectors WHERE rowid IN (SELECT rowid FROM vectors ORDER BY touched DESC, rowid DESC LIMIT -1 OFFSET ${MAX_ROWS});`);
@@ -88,13 +120,15 @@ async function request(settings, route, body, deadline) {
   return JSON.parse(Buffer.concat(parts.map(part => Buffer.from(part))).toString('utf8'));
 }
 async function inspect(settings, deadline) {
-  const tags = await request(settings, '/api/tags', null, deadline);
+  const [tags, show, ps] = await Promise.all([
+    request(settings, '/api/tags', null, deadline),
+    request(settings, '/api/show', {model: settings.model}, deadline),
+    request(settings, '/api/ps', null, deadline),
+  ]);
   const installed = tags.models?.find(item => modelName(item.name || item.model || '') === settings.model);
   if (!installed || String(installed.digest || '').replace(/^sha256:/, '').toLowerCase() !== settings.modelDigest) throw new Error('Local model is missing or its digest does not match the pinned model.');
-  const show = await request(settings, '/api/show', {model: settings.model}, deadline);
   const remote = object => object && typeof object === 'object' && Object.entries(object).some(([key, value]) => (/^(remote_host|remote_model|remote_url|cloud)$/i.test(key) && Boolean(value)) || (value && typeof value === 'object' && remote(value)));
   if (remote(installed) || remote(show) || (show.details?.format && show.details.format !== 'gguf')) throw new Error('Remote or non-local embedding models are not allowed.');
-  const ps = await request(settings, '/api/ps', null, deadline);
   const running = ps.models?.find(item => modelName(item.name || item.model || '') === settings.model);
   if (running && String(running.digest || '').replace(/^sha256:/, '').toLowerCase() !== settings.modelDigest) throw new Error('Loaded model digest does not match the pinned model.');
   return {loaded: Boolean(running), gpuBytes: Number.isFinite(running?.size_vram) ? running.size_vram : 0};
@@ -120,6 +154,16 @@ function boundedText(text, bytes) {
   return result;
 }
 function chunksFor(entry, budget, contentOnly = false) {
+  const rev = entry?.note?.revision;
+  const cacheKey = typeof rev === 'string' && /^[a-f0-9]{64}$/i.test(rev)
+    ? `${rev}\0${entry.note.title || ''}\0${budget}\0${contentOnly ? 1 : 0}`
+    : null;
+  if (cacheKey && chunkCache.has(cacheKey)) {
+    const hit = chunkCache.get(cacheKey);
+    chunkCache.delete(cacheKey);
+    chunkCache.set(cacheKey, hit);
+    return hit;
+  }
   const content = String(entry.content || '');
   const body = content.replace(/^---\r?\n[\s\S]*?\r?\n---(?:\r?\n|$)/, match => match.replace(/[^\r\n]/g, ' '));
   const lines = body.match(/[^\r\n]*(?:\r\n|\r|\n|$)/g).filter(Boolean), tokens = markdown.parse(body, {}), headings = new Map(), used = new Map();
@@ -167,7 +211,13 @@ function chunksFor(entry, budget, contentOnly = false) {
       }
     }
   }
-  flush(); return {chunks, incomplete};
+  flush();
+  const result = {chunks, incomplete};
+  if (cacheKey) {
+    chunkCache.set(cacheKey, result);
+    if (chunkCache.size > MAX_CHUNK_CACHE) chunkCache.delete(chunkCache.keys().next().value);
+  }
+  return result;
 }
 async function serialized(key, deadline, signal, work) {
   let slot = jobs.get(key);
@@ -243,7 +293,8 @@ export async function semanticSearch(config, entries, query, {limit = 100, timeo
       const unique = new Map();
       for (const chunk of chunks) if (!unique.has(chunk.key)) unique.set(chunk.key, chunk);
       const vectors = new Map(), missing = [];
-      for (const chunk of unique.values()) { const vector = loadVector(db, settings, chunk.key); if (vector) vectors.set(chunk.key, vector); else missing.push(chunk); }
+      const cachedVectors = loadVectorsBatch(db, settings, [...unique.keys()]);
+      for (const chunk of unique.values()) { const vector = cachedVectors.get(chunk.key); if (vector) vectors.set(chunk.key, vector); else missing.push(chunk); }
       // Checking /api/ps cannot prevent an unload between that check and /api/embed.
       // Automatic callers therefore use cached vectors only, even if currently loaded.
       if (warmOnly && missing.length) return {matches: [], status: {...status, state: info.loaded ? 'incomplete' : 'sleeping', reason: `Automatic retrieval uses cached query and document vectors only; semantic vectors are missing.${shortened ? ' Semantic query was shortened to fit the model context.' : ''}`}};
@@ -328,8 +379,9 @@ export async function semanticPairs(config, entries, {signal, timeoutMs = 120000
         }
       }
       const vectors = new Map(), missing = [];
+      const cachedVectors = loadVectorsBatch(db, settings, [...unique.keys()]);
       for (const chunk of unique.values()) {
-        const vector = loadVector(db, settings, chunk.key);
+        const vector = cachedVectors.get(chunk.key);
         if (vector) { vectors.set(chunk.key, vector); status.cacheHits++; } else missing.push(chunk);
         if ((status.cacheHits + missing.length) % 128 === 0) await checkpoint();
       }

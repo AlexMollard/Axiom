@@ -100,15 +100,27 @@ function protections(config, notes) {
   return result;
 }
 export async function getNoteUsage(config, notes, options = {}) {
-  const now = nowOf(options), reasons = protections(config, notes); let db, healthy = true, reason = null, startedAt = null, rows = new Map(), counts = new Map();
+  const now = nowOf(options), targetPath = options?.targetPath ?? null, reasons = protections(config, notes);
+  const targetNote = targetPath !== null ? (notes.find(note => note.path === targetPath) || null) : null;
+  let db, healthy = true, reason = null, startedAt = null, rows = new Map(), counts = new Map();
+  const fromDay = iso(new Date(now.getTime() - (constants.hotDays - 1) * DAY)).slice(0, 10), toDay = iso(now).slice(0, 10);
   try {
-    db = await open(config, now); insertInventory(db, notes, now);
+    db = await open(config, now);
+    insertInventory(db, targetPath !== null ? (targetNote ? [targetNote] : []) : notes, now);
     startedAt = db.prepare('SELECT value FROM meta WHERE key = ?').get('started')?.value || null;
-    rows = new Map(db.prepare('SELECT * FROM notes').all().map(row => [row.path, row]));
-    for (const row of db.prepare('SELECT path, kind, SUM(count) AS count FROM daily WHERE day >= ? AND day <= ? GROUP BY path, kind').all(iso(new Date(now.getTime() - (constants.hotDays - 1) * DAY)).slice(0, 10), iso(now).slice(0, 10))) counts.set(`${row.path}\0${row.kind}`, Number(row.count));
+    if (targetPath !== null) {
+      const row = db.prepare('SELECT * FROM notes WHERE path = ?').get(targetPath);
+      if (row) rows.set(row.path, row);
+      for (const entry of db.prepare('SELECT kind, SUM(count) AS count FROM daily WHERE path = ? AND day >= ? AND day <= ? GROUP BY kind').all(targetPath, fromDay, toDay)) {
+        counts.set(`${targetPath}\0${entry.kind}`, Number(entry.count));
+      }
+    } else {
+      rows = new Map(db.prepare('SELECT * FROM notes').all().map(row => [row.path, row]));
+      for (const row of db.prepare('SELECT path, kind, SUM(count) AS count FROM daily WHERE day >= ? AND day <= ? GROUP BY path, kind').all(fromDay, toDay)) counts.set(`${row.path}\0${row.kind}`, Number(row.count));
+    }
   } catch (error) { ({healthy, reason} = await failed(config, error)); } finally { db?.close(); }
   const age = value => value ? now.getTime() - Date.parse(value) : Infinity;
-  return {tracking: {startedAt, healthy, reason, ...constants}, notes: notes.map(note => {
+  const formatNote = note => {
     const row = rows.get(note.path), protectionReasons = reasons.get(note.path), reads30d = counts.get(`${note.path}\0read`) || 0, excerpts30d = counts.get(`${note.path}\0excerpt`) || 0, context30d = counts.get(`${note.path}\0context`) || 0;
     let status = 'insufficient-history';
     if (reads30d >= 3) status = 'hot';
@@ -117,5 +129,8 @@ export async function getNoteUsage(config, notes, options = {}) {
       status = !protectionReasons.length && Number.isFinite(Date.parse(note.updated)) && age(note.updated) >= 90 * DAY && age(row.last_used) >= 90 * DAY ? 'stale-candidate' : 'quiet';
     }
     return {...note, usage: {reads30d, excerpts30d, context30d, lastReadAt: row?.last_read || null, lastExcerptAt: row?.last_excerpt || null, lastContextAt: row?.last_context || null, lastUsedAt: row?.last_used || null, lastSource: row?.last_source || null, lastRevision: row?.last_revision || null, observedSince: row?.observed || null, status, protectionReasons}};
-  })};
+  };
+  const tracking = {startedAt, healthy, reason, ...constants};
+  if (targetPath !== null) return {tracking, note: targetNote ? formatNote(targetNote) : null};
+  return {tracking, notes: notes.map(formatNote)};
 }

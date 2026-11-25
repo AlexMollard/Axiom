@@ -1,5 +1,5 @@
 import {createHash} from 'node:crypto';
-import {catalog, readNote} from './memory.mjs';
+import {catalogWithContent} from './memory.mjs';
 import {protectedDeletionReason} from './management.mjs';
 import {getNoteUsage} from './note-usage.mjs';
 import {resolveNote} from './note-links.mjs';
@@ -38,16 +38,11 @@ export async function getCleanup(config, workspace, renderMarkdown, {semantic = 
   const configured = new Set(config.projects.map(project => project.id));
   if (workspace !== null && workspace !== undefined && workspace !== 'global' && workspace !== '__unmapped' && !configured.has(workspace)) throw Object.assign(new Error('Unknown workspace.'), {status: 400});
   const scannedAt = new Date().toISOString();
-  const catalogNotes = await catalog(config);
   // Incoming links can cross workspace boundaries.
-  const notes = new Array(catalogNotes.length);
-  let cursor = 0;
-  await Promise.all(Array.from({length: Math.min(12, notes.length)}, async () => {
-    while (cursor < notes.length) { const index = cursor++; notes[index] = await readNote(config, catalogNotes[index].path); }
-  }));
+  const notes = await catalogWithContent(config);
   const incoming = new Set(), outgoing = new Map();
   for (const note of notes) {
-    const graph = {targets: new Set(), unresolvedCount: 0};
+    const graph = {targets: new Set(), unresolvedCount: 0, linksOnly: true};
     renderMarkdown(note.content, note.path, notes, graph);
     outgoing.set(note.path, graph.targets);
     for (const target of graph.targets) incoming.add(target);
@@ -114,16 +109,21 @@ export async function getCleanup(config, workspace, renderMarkdown, {semantic = 
       const [a, b] = next.value;
       scope.comparedPairs++; mergePairsCompared++; comparedPaths.add(a.note.path); comparedPaths.add(b.note.path);
       if (a.body === b.body || Math.min(a.words.size, b.words.size) < 6 || outgoing.get(a.note.path)?.has(b.note.path) || outgoing.get(b.note.path)?.has(a.note.path)) continue;
-      const shared = [...a.words].filter(word => b.words.has(word)), titleTerms = [...a.title].filter(word => b.title.has(word));
-      const smallerOverlap = shared.length / Math.min(a.words.size, b.words.size), largerOverlap = shared.length / Math.max(a.words.size, b.words.size);
-      const strong = shared.length >= 12 && smallerOverlap >= 0.8 && largerOverlap >= 0.6;
-      const possible = shared.length >= 6 && titleTerms.length >= 2 && smallerOverlap >= 0.3 && largerOverlap >= 0.15 ||
-        shared.length >= 8 && smallerOverlap >= 0.75 && largerOverlap >= 0.2;
+      const [small, big] = a.words.size <= b.words.size ? [a.words, b.words] : [b.words, a.words];
+      let sharedCount = 0;
+      for (const word of small) if (big.has(word)) sharedCount++;
+      const smallerOverlap = sharedCount / small.size, largerOverlap = sharedCount / big.size;
+      if (sharedCount < 6 || smallerOverlap < 0.3 || largerOverlap < 0.15) continue;
+      const titleTerms = [...a.title].filter(word => b.title.has(word));
+      const strong = sharedCount >= 12 && smallerOverlap >= 0.8 && largerOverlap >= 0.6;
+      const possible = (titleTerms.length >= 2 && smallerOverlap >= 0.3 && largerOverlap >= 0.15) ||
+        (sharedCount >= 8 && smallerOverlap >= 0.75 && largerOverlap >= 0.2);
       if (!strong && !possible) continue;
+      const shared = [...small].filter(word => big.has(word));
       shared.sort((a, b) => frequencies.get(a) - frequencies.get(b) || a.localeCompare(b));
       add('merge', strong ? 'Strong content overlap; inspect differences before considering a merge.' : 'Possible topic overlap; the notes may contain complementary or conflicting details.',
         'Review only: compare both sources. This suggestion never authorizes removal or an automatic merge.', [a.note, b.note],
-        {reviewOnly: true, evidence: {level: strong ? 'strong-overlap' : 'possible-overlap', methods: ['lexical'], terms: [...new Set([...titleTerms, ...shared])].slice(0, 8), overlap: 2 * shared.length / (a.words.size + b.words.size)}});
+        {reviewOnly: true, evidence: {level: strong ? 'strong-overlap' : 'possible-overlap', methods: ['lexical'], terms: [...new Set([...titleTerms, ...shared])].slice(0, 8), overlap: 2 * sharedCount / (a.words.size + b.words.size)}});
     }
     if (!advanced) break;
   }
