@@ -11,12 +11,14 @@ import {preserveReviewedRevision} from './review-history.mjs';
 import {recordUsage} from './note-usage.mjs';
 import {queryWords, lexicalTerms, rankEntries, passageEvidence} from './search-index.mjs';
 import {embeddingSettings, embeddingStatus, semanticSearch} from './embeddings.mjs';
+import {syncVaultIndex, queryVaultFts} from './vault-index.mjs';
 
 const appDir = path.dirname(fileURLToPath(import.meta.url));
 const hash = value => createHash('sha256').update(value).digest('hex');
 const crlf = text => text.replace(/\r?\n/g, '\r\n');
 const missing = error => error.code === 'ENOENT';
 const inside = (root, target) => { const rel = path.relative(root, target); return rel === '' || (!rel.startsWith('..' + path.sep) && rel !== '..' && !path.isAbsolute(rel)); };
+const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
 
 export async function loadConfig(configPath = process.env.SHARED_BRAIN_CONFIG || path.join(process.env.LOCALAPPDATA || path.join(os.homedir(), '.config'), 'Axiom', 'config.json')) {
   const raw = await fs.readFile(configPath, 'utf8');
@@ -34,7 +36,7 @@ export async function loadConfig(configPath = process.env.SHARED_BRAIN_CONFIG ||
     ids.add(project.id);
   }
   config.projects ||= [];
-  config.indexPath = path.join(path.dirname(path.resolve(configPath)), '.state', `index-${hash(config.vault).slice(0, 16)}.json`);
+  config.indexPath = path.join(path.dirname(path.resolve(configPath)), '.state', `index-${hash(config.vault).slice(0, 16)}.sqlite`);
   config.configPath = path.resolve(configPath);
   embeddingSettings(config);
   return config;
@@ -117,8 +119,7 @@ const MAX_WARM_INDEX_BYTES = 32 * 1024 * 1024;
 const indexIdentity = stat => `${stat.dev}:${stat.ino}:${stat.size}:${stat.mtimeMs}:${stat.ctimeMs}`;
 
 
-async function indexedNotes(config) {
-  const indexPath = config.indexPath || path.join(config.backupDir, '.index.json');
+async function indexedNotesJson(config, indexPath) {
   let previous = {}, trusted = false, diskIdentity = null;
   try {
     const stat = await fs.stat(indexPath), before = indexIdentity(stat);
@@ -187,9 +188,41 @@ async function indexedNotes(config) {
   return Object.values(entries);
 }
 
+async function indexedVault(config) {
+  const indexPath = config.indexPath || path.join(config.backupDir, '.index.sqlite');
+  if (indexPath.toLowerCase().endsWith('.json')) {
+    return {entries: await indexedNotesJson(config, indexPath), persistedSqlite: false, indexPath};
+  }
+  const {entries, persisted} = await syncVaultIndex(config, indexPath, {readRawNote, hash});
+  return {entries, persistedSqlite: persisted, indexPath};
+}
+
+async function indexedNotes(config) {
+  return (await indexedVault(config)).entries;
+}
+
 export async function catalog(config) {
   const reviews = await readReviews(config);
   return (await indexedNotes(config)).map(entry => applyReview({...entry.note, ...(Array.isArray(entry.note.links) ? {links: [...entry.note.links]} : {})}, reviews)).sort((a, b) => a.path.localeCompare(b.path));
+}
+
+export async function catalogWithContent(config) {
+  const reviews = await readReviews(config);
+  return (await indexedNotes(config)).map(entry => applyReview({...entry.note, ...(Array.isArray(entry.note.links) ? {links: [...entry.note.links]} : {}), content: entry.content}, reviews)).sort((a, b) => a.path.localeCompare(b.path));
+}
+
+export async function readNotes(config, paths) {
+  const reviews = await readReviews(config);
+  const result = new Array(paths.length);
+  let cursor = 0;
+  await Promise.all(Array.from({length: Math.min(12, paths.length)}, async () => {
+    while (cursor < paths.length) {
+      const index = cursor++;
+      const raw = await readRawNote(config, paths[index]);
+      result[index] = raw.owner === 'agent' ? applyReview(raw, reviews) : raw;
+    }
+  }));
+  return result;
 }
 
 function passageMatch(content, words) {
@@ -238,9 +271,11 @@ export async function search(config, query, {cwd = process.cwd(), limit = 12, al
     (!workspace || workspace === 'all' || (workspace === '__unmapped' ? note.project !== 'global' && !projects.has(note.project) : note.project === workspace)) &&
     (!owner || owner === 'all' || note.owner === owner) &&
     (!review || review === 'all' || note.reviewStatus === review);
-  const entries = (await indexedNotes(config)).filter(({note}) => all || ['global', project].includes(note.project));
+  const {entries: allEntries, persistedSqlite, indexPath} = await indexedVault(config);
+  const entries = allEntries.filter(({note}) => all || ['global', project].includes(note.project));
   const reviews = await readReviews(config);
-  const lexical = await rankEntries(entries, words, JSON.stringify([config.vault, all ? 'all' : project]));
+  const fts = persistedSqlite ? await queryVaultFts(config, indexPath, words, {all, project}) : null;
+  const lexical = fts !== null ? fts : await rankEntries(entries, words, JSON.stringify([config.vault, all ? 'all' : project]));
   const semantic = mode === 'hybrid'
     ? await semanticSearch(config, entries.filter(({note}) => eligible(applyReview(note, reviews))), query, {limit: 100, warmOnly, signal, timeoutMs: warmOnly ? 1200 : 60000})
     : {matches: [], status: {enabled: Boolean(config.embeddings?.enabled), state: 'lexical', reason: 'Lexical search selected.'}};
@@ -257,11 +292,26 @@ export async function search(config, query, {cwd = process.cwd(), limit = 12, al
     matches = [...combined.values()].sort((a, b) => b.score - a.score || a.path.localeCompare(b.path));
   }
   const currentReviews = mode === 'hybrid' && semantic.status.enabled ? await readReviews(config) : reviews;
+  const entryByPath = new Map(entries.map(entry => [entry.note.path, entry]));
   const items = [];
   let total = 0;
   for (let batchStart = 0; batchStart < matches.length;) {
     if (!all && items.length >= maximum) break;
-    const batch = matches.slice(batchStart, batchStart + (all ? 12 : 1));
+    if (total < start || items.length >= maximum) {
+      const candidate = matches[batchStart++];
+      const cached = entryByPath.get(candidate.path);
+      if (!cached) continue;
+      const note = applyReview({...cached.note}, currentReviews);
+      const terms = new Set(lexicalTerms(`${note.title} ${note.path} ${cached.content}`));
+      const semanticHit = semanticByPath.get(note.path);
+      const freshSemantic = semanticHit?.revision === note.revision ? semanticHit : null;
+      const lexicalMatch = words.some(word => terms.has(word));
+      if ((!lexicalMatch && !freshSemantic) || !eligible(note)) continue;
+      total++;
+      continue;
+    }
+    const remaining = Math.max(1, maximum - items.length);
+    const batch = matches.slice(batchStart, batchStart + (all ? Math.min(12, remaining) : 1));
     batchStart += batch.length;
     const reads = await Promise.allSettled(batch.map(candidate => readRawNote(config, candidate.path)));
     for (let i = 0; i < batch.length; i++) {
@@ -387,23 +437,46 @@ async function locked(config, action) {
   try {
     if (process.platform === 'win32') {
       const vault = await fs.realpath(config.vault);
-      guard = net.createServer(socket => socket.destroy());
-      try {
-        await new Promise((resolve, reject) => {
-          guard.once('error', reject);
-          guard.listen(`\\\\.\\pipe\\shared-brain-lock-${hash(vault.toLowerCase()).slice(0, 32)}`, resolve);
-        });
-      } catch (error) {
-        guard = null;
-        if (error.code === 'EADDRINUSE' || error.code === 'EACCES') throw held();
-        throw error;
+      const pipeName = `\\\\.\\pipe\\shared-brain-lock-${hash(vault.toLowerCase()).slice(0, 32)}`;
+      const deadline = Date.now() + 280;
+      while (true) {
+        const candidateGuard = net.createServer(socket => socket.destroy());
+        try {
+          await new Promise((resolve, reject) => {
+            candidateGuard.once('error', reject);
+            candidateGuard.listen(pipeName, resolve);
+          });
+          guard = candidateGuard;
+          break;
+        } catch (error) {
+          try { candidateGuard.close(); } catch {}
+          if (error.code === 'EADDRINUSE' || error.code === 'EACCES') {
+            if (Date.now() < deadline) {
+              await sleep(25 + Math.floor(Math.random() * 30));
+              continue;
+            }
+            throw held();
+          }
+          throw error;
+        }
       }
     }
     const acquire = async () => {
       if (!guard) {
-        lock = await fs.open(lockPath, 'wx');
-        await lock.writeFile(JSON.stringify({pid: process.pid, started: new Date().toISOString()}));
-        return;
+        const deadline = Date.now() + 280;
+        while (true) {
+          try {
+            lock = await fs.open(lockPath, 'wx');
+            await lock.writeFile(JSON.stringify({pid: process.pid, started: new Date().toISOString()}));
+            return;
+          } catch (error) {
+            if (error.code === 'EEXIST' && Date.now() < deadline) {
+              await sleep(25 + Math.floor(Math.random() * 30));
+              continue;
+            }
+            throw error;
+          }
+        }
       }
       const temporary = `${lockPath}.${randomUUID()}.tmp`;
       let candidate;
@@ -617,33 +690,83 @@ async function inventory(root) {
   await walk(); return files.sort((a,b) => a.path.localeCompare(b.path));
 }
 
+const SNAPSHOT_NAME = /^\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}-\d{3}Z-[a-f0-9]{8}$/;
+
+async function collectPaths(root) {
+  const relPaths = [];
+  async function walk(relative = '') {
+    for (const entry of await fs.readdir(path.join(root, relative), {withFileTypes: true})) {
+      if (entry.isSymbolicLink()) throw new Error(`Snapshot refuses links: ${entry.name}`);
+      const rel = relative ? `${relative}/${entry.name}` : entry.name;
+      if (entry.isDirectory()) await walk(rel);
+      else if (entry.isFile()) relPaths.push(rel);
+    }
+  }
+  if ((await fs.lstat(root)).isSymbolicLink()) throw new Error('Snapshot root cannot be a link.');
+  await walk();
+  return relPaths.sort((a, b) => a.localeCompare(b));
+}
+
+async function pruneOldSnapshots(snapshotsRoot, retention) {
+  try {
+    const entries = await fs.readdir(snapshotsRoot, {withFileTypes: true});
+    const names = entries
+      .filter(entry => entry.isDirectory() && !entry.isSymbolicLink() && SNAPSHOT_NAME.test(entry.name))
+      .map(entry => entry.name)
+      .sort((a, b) => b.localeCompare(a));
+    const complete = [];
+    for (const name of names) {
+      try {
+        const manifestStat = await fs.lstat(path.join(snapshotsRoot, name, 'manifest.json'));
+        if (manifestStat.isFile()) complete.push(name);
+      } catch {}
+    }
+    for (const stale of complete.slice(retention)) {
+      await fs.rm(path.join(snapshotsRoot, stale), {recursive: true, force: true});
+    }
+  } catch (error) {
+    console.warn(`Shared Brain: snapshot pruning skipped: ${error.message}`);
+  }
+}
+
 export async function backup(config) {
   return locked(config, () => backupUnlocked(config));
 }
 
 async function backupUnlocked(config) {
-    const snapshot = path.join(config.backupDir, 'snapshots', `${new Date().toISOString().replace(/[:.]/g, '-')}-${randomUUID().slice(0,8)}`);
-    const configBytes = config.configPath ? await fs.readFile(config.configPath) : null;
-    const settings = configBytes ? JSON.parse(configBytes.toString('utf8')) : config;
-    const workspaceSettings = crlf(JSON.stringify({version: 1, projects: settings.projects || [], workspaceNames: settings.workspaceNames || {}, workspaceGroups: settings.workspaceGroups || {}, workspacePins: settings.workspacePins || {}}, null, 2) + '\n');
-    const files = await inventory(config.vault);
-    await fs.mkdir(snapshot, {recursive: true});
-    for (const file of files) {
-      const source = path.join(config.vault, file.path);
-      const destination = path.join(snapshot, 'vault', file.path);
+  const snapshotName = `${new Date().toISOString().replace(/[:.]/g, '-')}-${randomUUID().slice(0, 8)}`;
+  const snapshotsRoot = path.join(config.backupDir, 'snapshots');
+  const staging = path.join(snapshotsRoot, `.tmp-${snapshotName}`);
+  const snapshot = path.join(snapshotsRoot, snapshotName);
+  const configBytes = config.configPath ? await fs.readFile(config.configPath) : null;
+  const settings = configBytes ? JSON.parse(configBytes.toString('utf8')) : config;
+  const workspaceSettings = crlf(JSON.stringify({version: 1, projects: settings.projects || [], workspaceNames: settings.workspaceNames || {}, workspaceGroups: settings.workspaceGroups || {}, workspacePins: settings.workspacePins || {}}, null, 2) + '\n');
+  const relPaths = await collectPaths(config.vault);
+  await fs.mkdir(staging, {recursive: true});
+  try {
+    const files = [];
+    for (const rel of relPaths) {
+      const source = path.join(config.vault, rel);
+      const destination = path.join(staging, 'vault', rel);
       const bytes = await fs.readFile(source);
-      if (hash(bytes) !== file.sha256) throw new Error('Vault changed during snapshot; incomplete snapshot has no manifest and is not restorable.');
+      files.push({path: rel, sha256: hash(bytes)});
       await fs.mkdir(path.dirname(destination), {recursive: true});
       await fs.writeFile(destination, bytes, {flag: 'wx'});
     }
     const finalFiles = await inventory(config.vault);
     if (JSON.stringify(files) !== JSON.stringify(finalFiles)) throw new Error('Vault changed during snapshot; retry when writes settle.');
     if (configBytes && !configBytes.equals(await fs.readFile(config.configPath))) throw new Error('Workspace settings changed during snapshot; retry when writes settle.');
-    await fs.writeFile(path.join(snapshot, 'workspace-settings.json'), workspaceSettings, {flag: 'wx'});
-    const manifest = {version:1, created:new Date().toISOString(), source:config.vault, files, workspaceSettingsSha256: hash(workspaceSettings)};
-    await fs.writeFile(path.join(snapshot, 'manifest.json'), crlf(JSON.stringify(manifest,null,2)+'\n'), {flag:'wx'});
-    return {snapshot, files:files.length};
-
+    await fs.writeFile(path.join(staging, 'workspace-settings.json'), workspaceSettings, {flag: 'wx'});
+    const manifest = {version: 1, created: new Date().toISOString(), source: config.vault, files, workspaceSettingsSha256: hash(workspaceSettings)};
+    await fs.writeFile(path.join(staging, 'manifest.json'), crlf(JSON.stringify(manifest, null, 2) + '\n'), {flag: 'wx'});
+    await fs.rename(staging, snapshot);
+    const retention = Number.isInteger(config.backupRetention) && config.backupRetention >= 1 ? config.backupRetention : 30;
+    await pruneOldSnapshots(snapshotsRoot, retention);
+    return {snapshot, files: files.length};
+  } catch (error) {
+    await fs.rm(staging, {recursive: true, force: true}).catch(() => {});
+    throw error;
+  }
 }
 export {locked, safePath, readRawNote, prepareMarkdown, commitMarkdown, backupUnlocked, hash, crlf};
 
