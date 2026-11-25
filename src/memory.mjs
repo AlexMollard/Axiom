@@ -496,6 +496,53 @@ export async function saveReviewFromEditor(config, relative, expectedRevision, d
   });
 }
 
+export async function saveReviewsBatchFromEditor(config, items, decision) {
+  if (!Array.isArray(items) || items.length < 1 || items.length > 200) throw new Error('Supply between 1 and 200 review items.');
+  if (!['reviewed', 'unreviewed'].includes(decision)) throw new Error('Review decision must be reviewed or unreviewed.');
+  const deduped = new Map();
+  for (const item of items) {
+    if (!item || typeof item !== 'object') throw new Error('Invalid review item.');
+    validateAgentNotePath(item.path);
+    if (!/^[a-f0-9]{64}$/.test(item.expectedRevision || '')) throw new Error(`Supply the current note revision for ${item.path}.`);
+    deduped.set(item.path, item.expectedRevision);
+  }
+  return locked(config, async () => {
+    let ledger;
+    try { ledger = await readRawNote(config, REVIEW_LEDGER_PATH); }
+    catch (error) { if (!missing(error)) throw error; }
+    const reviews = ledger ? parseReviewLedger(ledger.content) : Object.create(null);
+    const applied = [], conflicts = [];
+    const reviewedAt = new Date().toISOString();
+    for (const [relative, expectedRevision] of deduped.entries()) {
+      let note;
+      try { note = await readRawNote(config, relative); }
+      catch (error) {
+        if (missing(error)) { conflicts.push({path: relative, reason: 'Note not found.'}); continue; }
+        throw error;
+      }
+      if (note.revision !== expectedRevision) {
+        conflicts.push({path: note.path, reason: 'Revision conflict: this note changed on disk.'});
+        continue;
+      }
+      if (decision === 'reviewed') {
+        await preserveReviewedRevision(config, note);
+        reviews[note.path] = {revision: note.revision, reviewedAt, approved: true};
+      } else if (reviews[note.path]) {
+        reviews[note.path] = {...reviews[note.path], approved: false};
+      }
+      applied.push(note);
+    }
+    if (applied.length > 0) {
+      const prepared = await prepareMarkdown(config, REVIEW_LEDGER_PATH, serializeReviewLedger(reviews), ledger?.revision || 'new');
+      await commitMarkdown(config, prepared);
+    }
+    return {
+      updated: applied.map(note => applyReview(note, reviews)),
+      conflicts,
+    };
+  });
+}
+
 async function prepareMarkdown(config, relative, content, expectedRevision, {normalize = true} = {}) {
   if (typeof relative !== 'string' || !/\.md$/i.test(relative)) throw new Error('Only Markdown note paths can be saved.');
   if (typeof content !== 'string') throw new Error('Content must be Markdown text no larger than 2 MiB.');

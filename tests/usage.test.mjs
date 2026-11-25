@@ -6,6 +6,7 @@ import path from 'node:path';
 import {spawn} from 'node:child_process';
 import {inventoryUsage, recordUsage, getNoteUsage} from '../src/note-usage.mjs';
 import {catalog, readNote, search, policies} from '../src/memory.mjs';
+import {createServer} from '../src/server.mjs';
 
 const day = 86400000, start = Date.parse('2025-01-01T12:00:00Z');
 const at = days => ({now: start + days * day});
@@ -125,4 +126,20 @@ test('failed tracking reports degradation and resets maturity on recovery', asyn
   assert.equal(failed.tracking.healthy, false); assert.notEqual(one(failed, n.path).status, 'stale-candidate');
   await fs.rmdir(path.join(dir, db)); await fs.rename(path.join(dir, `${db}.saved`), path.join(dir, db));
   assert.equal(one(await getNoteUsage(config, [n], at(92)), n.path).status, 'insufficient-history');
+});
+
+test('GET /api/note-usage?path=... returns single-note usage and tracking status', async t => {
+  const {config, make} = await fixture(t);
+  await make('Agents/Alpha.md', '# Alpha\nalpha content');
+  await make('Agents/Beta.md', '# Beta\nbeta content');
+  const server = createServer(config);
+  await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
+  t.after(() => new Promise(resolve => server.close(resolve)));
+  const origin = `http://127.0.0.1:${server.address().port}`;
+  const res = await fetch(`${origin}/api/note-usage?path=${encodeURIComponent('Agents/Alpha.md')}`);
+  assert.equal(res.status, 200);
+  const body = await res.json();
+  assert.equal(body.tracking.healthy, true);
+  assert.equal(body.note.path, 'Agents/Alpha.md');
+  assert.equal(body.notes, undefined);
 });

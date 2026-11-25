@@ -143,3 +143,47 @@ test('workspace aliases and nested roots select longest match', async t => {
   assert.equal(projectFor(config, path.join(root, 'alias', 'nested', 'file')), 'inner');
   assert.equal(projectFor(config, path.join(root, 'alias-sibling')), 'unmapped');
 });
+
+test('batch human review updates multiple notes atomically and reports conflicts', async t => {
+  const {config, first, second} = await fixture(t);
+  const server = createServer(config);
+  await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
+  t.after(() => new Promise(resolve => server.close(resolve)));
+  config.port = server.address().port;
+  const origin = `http://127.0.0.1:${config.port}`;
+  const token = (await (await fetch(`${origin}/api/editor-session`)).json()).token;
+  const headers = {'content-type': 'application/json', origin, 'x-shared-brain-csrf': token};
+
+  const a = await readNote(config, first);
+  const b = await readNote(config, second);
+  const batchRes = await fetch(`${origin}/api/note-reviews/batch`, {
+    method: 'PUT',
+    headers,
+    body: JSON.stringify({
+      decision: 'reviewed',
+      items: [
+        {path: first, expectedRevision: a.revision},
+        {path: second, expectedRevision: '0'.repeat(64)},
+        {path: 'Agents/Missing.md', expectedRevision: b.revision},
+      ],
+    }),
+  });
+  assert.equal(batchRes.status, 200);
+  const body = await batchRes.json();
+  assert.equal(body.updated.length, 1);
+  assert.equal(body.updated[0].path, first);
+  assert.equal(body.updated[0].reviewStatus, 'reviewed');
+  assert.equal(body.conflicts.length, 2);
+
+  const undoRes = await fetch(`${origin}/api/note-reviews/batch`, {
+    method: 'PUT',
+    headers,
+    body: JSON.stringify({
+      decision: 'unreviewed',
+      items: [{path: first, expectedRevision: a.revision}],
+    }),
+  });
+  assert.equal(undoRes.status, 200);
+  const undoBody = await undoRes.json();
+  assert.equal(undoBody.updated[0].reviewStatus, 'unreviewed');
+});

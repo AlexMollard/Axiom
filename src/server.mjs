@@ -9,7 +9,7 @@ import path from 'node:path';
 import { createHash, randomBytes, timingSafeEqual } from 'node:crypto';
 import MarkdownIt from 'markdown-it';
 import sanitizeHtml from 'sanitize-html';
-import { catalog, readNote, search, loadConfig, backup, saveFromEditor, saveReviewFromEditor, refreshEmbeddings, hash } from './memory.mjs';
+import { catalog, readNote, search, loadConfig, backup, saveFromEditor, saveReviewFromEditor, saveReviewsBatchFromEditor, refreshEmbeddings, hash } from './memory.mjs';
 import { buildWorkspaceGraph } from './workspace-graph.mjs';
 import { readWorkspaceIcons, searchWorkspaceIcons, getWorkspaceIconNodes } from './workspace-icons.mjs';
 import { workspaceDetail, updateWorkspace, deleteNote, deleteWorkspace, listTrash, restoreTrash, protectedDeletionReason } from './management.mjs';
@@ -143,14 +143,15 @@ export function createServer(config, configId = null) {
       const save = req.method === 'PUT' && url.pathname === '/api/note';
       const preview = req.method === 'POST' && url.pathname === '/api/preview';
       const review = req.method === 'PUT' && url.pathname === '/api/note-review';
+      const reviewBatch = req.method === 'PUT' && url.pathname === '/api/note-reviews/batch';
       const management = (req.method === 'PUT' && url.pathname === '/api/workspace') || (req.method === 'DELETE' && ['/api/note', '/api/workspace'].includes(url.pathname)) || (req.method === 'POST' && url.pathname === '/api/trash/restore');
       const recovery = req.method === 'POST' && ['/api/recovery/backup', '/api/recovery/check'].includes(url.pathname);
       const historyRestore = req.method === 'POST' && url.pathname === '/api/note-history/restore';
       const capturePreview = req.method === 'POST' && url.pathname === '/api/capture-suggestions';
       const semanticReindex = req.method === 'POST' && url.pathname === '/api/embeddings/reindex';
       const semanticCleanup = req.method === 'POST' && url.pathname === '/api/cleanup';
-      if (!read && !save && !preview && !review && !management && !recovery && !historyRestore && !capturePreview && !semanticReindex && !semanticCleanup) { res.setHeader('Allow', 'GET, HEAD, PUT, POST, DELETE'); return json(405, { error: 'Method not allowed' }); }
-      if (save || preview || review || management || recovery || historyRestore || capturePreview || semanticReindex || semanticCleanup) {
+      if (!read && !save && !preview && !review && !reviewBatch && !management && !recovery && !historyRestore && !capturePreview && !semanticReindex && !semanticCleanup) { res.setHeader('Allow', 'GET, HEAD, PUT, POST, DELETE'); return json(405, { error: 'Method not allowed' }); }
+      if (save || preview || review || reviewBatch || management || recovery || historyRestore || capturePreview || semanticReindex || semanticCleanup) {
         if (req.headers.origin !== `http://${host.toLowerCase()}` || req.headers['sec-fetch-site'] === 'cross-site') return json(403, { error: 'Editor requests must originate from this site.' });
         const token = req.headers['x-shared-brain-csrf'];
         if (typeof token !== 'string' || !/^[a-f0-9]{64}$/.test(token) || !timingSafeEqual(Buffer.from(token, 'hex'), csrf)) return json(403, { error: 'Editor session is missing or expired. Reload the editor session; your draft has not been saved.' });
@@ -188,6 +189,9 @@ export function createServer(config, configId = null) {
             if (!eligible) return json(409, {error: 'This note is no longer an eligible cleanup candidate or has changed. Rescan before deciding.'});
           }
           return json(200, await deleteNote(config, body.path, body.expectedRevision));
+        }
+        if (reviewBatch) {
+          return json(200, await saveReviewsBatchFromEditor(config, body.items, body.decision));
         }
         if (review) {
           const note = await saveReviewFromEditor(config, body.path, body.expectedRevision, body.decision);
@@ -249,7 +253,14 @@ export function createServer(config, configId = null) {
       if (url.pathname === '/api/embeddings') return json(200, await embeddingStatus(config));
       if (url.pathname === '/api/harnesses') return json(200, await getHarnessStatus(config));
       if (url.pathname === '/api/recovery') return json(200, await getRecoveryStatus(config));
-      if (url.pathname === '/api/note-usage') return json(200, await getNoteUsage(config, await catalog(config)));
+      if (url.pathname === '/api/note-usage') {
+        const result = await getNoteUsage(config, await catalog(config));
+        const targetPath = url.searchParams.get('path');
+        if (targetPath !== null) {
+          return json(200, { tracking: result.tracking, note: result.notes.find(n => n.path === targetPath) || null });
+        }
+        return json(200, result);
+      }
       if (url.pathname === '/api/note') {
         const notePath = url.searchParams.get('path');
         if (!notePath) return json(400, { error: 'A note path is required' });
