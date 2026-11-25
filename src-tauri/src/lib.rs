@@ -130,7 +130,7 @@ fn ensure_quick_capture_window(app: &AppHandle, base_url: &str) {
         }
     }
     if let Ok(quick_win) = quick_builder.build() {
-        win_native::apply_win11_window_polish(&quick_win);
+        win_native::apply_win11_window_polish_with_border(&quick_win, 0x0042_5479);
         win_native::attach_webview_crash_recovery(&quick_win, format!("{base_url}/?desktopMode=quick"));
         let quick_handle = quick_win.clone();
         quick_win.on_window_event(move |event| match event {

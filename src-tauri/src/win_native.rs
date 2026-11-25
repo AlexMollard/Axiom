@@ -252,7 +252,7 @@ pub fn set_taskbar_progress(app: &AppHandle, percent: Option<u64>) {
     }
 }
 
-pub fn apply_win11_window_polish(window: &WebviewWindow) {
+pub fn apply_win11_window_polish_with_border(window: &WebviewWindow, border_color: u32) {
     #[cfg(windows)]
     {
         use std::ffi::c_void;
@@ -269,7 +269,6 @@ pub fn apply_win11_window_polish(window: &WebviewWindow) {
             let hwnd: HWND = raw_hwnd.0 as HWND;
             let dark: i32 = 1;
             let round: i32 = DWMWCP_ROUND;
-            let border_color: u32 = 0x0024_272b;
             let caption_color: u32 = 0x0011_1213;
             unsafe {
                 let _ = DwmSetWindowAttribute(
@@ -301,8 +300,12 @@ pub fn apply_win11_window_polish(window: &WebviewWindow) {
     }
     #[cfg(not(windows))]
     {
-        let _ = window;
+        let _ = (window, border_color);
     }
+}
+
+pub fn apply_win11_window_polish(window: &WebviewWindow) {
+    apply_win11_window_polish_with_border(window, 0x0024_272b);
 }
 
 pub fn trigger_snap_layouts() {

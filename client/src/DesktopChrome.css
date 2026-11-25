@@ -727,14 +727,35 @@ mark[data-axiom-find="current"] {
   color: var(--muted);
 }
 
+html.quick-mode {
+  scrollbar-gutter: auto;
+  overflow: hidden;
+  height: 100%;
+}
+
+html.quick-mode body,
+html.quick-mode #root {
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+  margin: 0;
+  padding: 0;
+}
+
 .quick-overlay {
-  height: 100vh;
+  width: 100%;
+  height: 100%;
   display: flex;
   flex-direction: column;
   background: var(--bg);
   border: 1px solid var(--accent-border);
-  border-radius: 12px;
+  border-radius: 8px;
   overflow: hidden;
+}
+
+html.quick-mode-desktop .quick-overlay {
+  border: 0;
+  border-radius: 0;
 }
 
 .quick-overlay-header {
