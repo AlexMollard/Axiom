@@ -35,7 +35,7 @@ test('MCP SDK tools preserve scope, revisions and ownership', async t => {
   await server.connect(serverTransport);
   await client.connect(clientTransport);
   t.after(async () => { await client.close(); await server.close(); });
-  assert.deepEqual((await client.listTools()).tools.map(tool => tool.name).sort(), ['capture_suggestions', 'policy', 'read', 'search', 'workspace_icon_search', 'write']);
+  assert.deepEqual((await client.listTools()).tools.map(tool => tool.name).sort(), ['capture_suggestions', 'knowledge', 'policy', 'read', 'search', 'workspace_icon_search', 'write']);
   const make = (project, body) => call(client, 'write', {path: `Agents/Memory/Projects/${project}/quartz.md`, content: `---\r\nstatus: current\r\n---\r\n# Quartz\r\n${body}`, expectedRevision: 'new'});
   const alpha = value(await make('alpha', 'alpha secret'));
   await make('beta', 'beta secret');
@@ -57,6 +57,28 @@ test('MCP SDK tools preserve scope, revisions and ownership', async t => {
     assert.equal((await call(client, 'write', {path: protectedPath, content: 'overwrite', expectedRevision: 'new'})).isError, true);
   }
   assert.match(value(await call(client, 'read', {path: 'Owner/Policies.md'})).content, /Never deploy/);
+  const know = value(await call(client, 'knowledge', {path: alpha.path}));
+  assert.equal(know.path, alpha.path);
+  const betaScoped = value(await call(client, 'search', {query: 'quartz', cwd: path.join(path.dirname(cwd), 'beta')}));
+  assert.ok(betaScoped.items.some(item => item.path.includes('/beta/')));
+  assert.ok(betaScoped.items.every(item => !item.path.includes('/alpha/')));
+});
+
+test('MCP reloads config.json changes automatically on next tool call', async t => {
+  const {root, config, configPath, cwd} = await fixture(t);
+  const server = createMcpServer(config, {cwd});
+  const client = new Client({name: 'reload-client', version: '1'});
+  const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+  await server.connect(serverTransport);
+  await client.connect(clientTransport);
+  t.after(async () => { await client.close(); await server.close(); });
+  const gammaRoot = path.join(root, 'gamma');
+  const raw = JSON.parse(await fs.readFile(configPath, 'utf8'));
+  raw.projects.push({id: 'gamma', root: gammaRoot});
+  await new Promise(resolve => setTimeout(resolve, 25));
+  await fs.writeFile(configPath, JSON.stringify(raw));
+  const policyText = (await call(client, 'policy', {cwd: gammaRoot})).content[0].text;
+  assert.match(policyText, /project: gamma/);
 });
 
 test('stdio entrypoint starts through a linked installation with explicit config and cwd', async t => {

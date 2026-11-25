@@ -61,6 +61,10 @@ test('owner writes, path traversal, and junction escapes cannot mutate protected
   const note=await readNote(config,'Owner/Policies.md');
   assert.match(note.content,/Never deploy automatically/);
   assert.equal(isProtectedPath(config,path.join(config.vault,'Owner','Policies.md'),root),true);
+  assert.equal(isProtectedPath(config,path.join(config.vault,'Agents','Workspace icons.md'),root),true);
+  if (process.platform === 'win32') {
+    assert.equal(isProtectedPath(config,path.join(config.vault,'agents','new.md'),root),false);
+  }
   assert.equal(isProtectedPath(config,path.join(config.vault,'Agents','new.md'),root),false);
 });
 

@@ -8,6 +8,7 @@ import { getCaptureSuggestions, getNoteKnowledge } from '../src/knowledge.mjs';
 export default function (pi: ExtensionAPI) {
   const Type = pi.typebox.Type;
   let needsPolicyContext = true;
+  const seen = new Set<string>();
   const text = (value: unknown) => ({ content: [{ type: 'text' as const, text: JSON.stringify(value) }], details: {} });
   const failure = (error: unknown) => { throw new Error(`Shared Brain: ${error instanceof Error ? error.message : String(error)}`); };
 
@@ -61,7 +62,7 @@ export default function (pi: ExtensionAPI) {
   });
 
   pi.on('input', async (_event, ctx) => {
-    try { const config = await loadConfig(); await policies(config, ctx.cwd, _event.text); await observeHarness(config, 'omp', 'input'); }
+    try { const config = await loadConfig(); await policies(config, ctx.cwd, ''); await observeHarness(config, 'omp', 'input'); }
     catch (error) {
       ctx.ui.notify(`Shared Brain policy unavailable; prompt blocked: ${error instanceof Error ? error.message : String(error)}`, 'error');
       return { handled: true };
@@ -71,7 +72,9 @@ export default function (pi: ExtensionAPI) {
     needsPolicyContext = true;
     try {
       const config = await loadConfig();
-      const policy = await policies(config, ctx.cwd, event.prompt, event.reason === 'revive' ? null : { source: 'omp' });
+      if (seen.size > 512) seen.clear();
+      const usage = event.reason === 'revive' ? null : { source: 'omp', seen };
+      const policy = await policies(config, ctx.cwd, event.prompt, usage);
       await observeHarness(config, 'omp', 'before_agent_start');
       needsPolicyContext = event.reason === 'revive';
       if (!needsPolicyContext) return { systemPrompt: [...event.systemPrompt, policy] };

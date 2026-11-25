@@ -19,7 +19,10 @@ const missing = error => error.code === 'ENOENT';
 const inside = (root, target) => { const rel = path.relative(root, target); return rel === '' || (!rel.startsWith('..' + path.sep) && rel !== '..' && !path.isAbsolute(rel)); };
 
 export async function loadConfig(configPath = process.env.SHARED_BRAIN_CONFIG || path.join(process.env.LOCALAPPDATA || path.join(os.homedir(), '.config'), 'Axiom', 'config.json')) {
-  const config = JSON.parse(await fs.readFile(configPath, 'utf8'));
+  const raw = await fs.readFile(configPath, 'utf8');
+  const config = JSON.parse(raw);
+  const stat = await fs.stat(configPath).catch(() => null);
+  config.configStamp = stat ? `${stat.mtimeMs}:${stat.size}` : '';
   if (!path.isAbsolute(config.vault) || !path.isAbsolute(config.backupDir)) throw new Error('Vault and backupDir must be absolute paths.');
   config.vault = path.resolve(config.vault);
   config.backupDir = path.resolve(config.backupDir);
@@ -370,7 +373,11 @@ export function isProtectedPath(config, candidate, cwd = process.cwd()) {
   const full = path.resolve(cwd, candidate);
   if (!inside(config.vault, full)) return false;
   const relative = path.relative(config.vault, full).replaceAll('\\', '/');
-  return !relative.startsWith('Agents/');
+  const underAgents = process.platform === 'win32'
+    ? relative.toLowerCase().startsWith('agents/')
+    : relative.startsWith('Agents/');
+  if (!underAgents) return true;
+  return relative.toLowerCase() === WORKSPACE_ICONS_PATH.toLowerCase();
 }
 
 async function locked(config, action) {
@@ -478,10 +485,11 @@ export async function saveReviewFromEditor(config, relative, expectedRevision, d
     try { ledger = await readRawNote(config, REVIEW_LEDGER_PATH); }
     catch (error) { if (!missing(error)) throw error; }
     const reviews = ledger ? parseReviewLedger(ledger.content) : Object.create(null);
+    const key = note.path;
     if (decision === 'reviewed') {
       await preserveReviewedRevision(config, note);
-      reviews[relative] = {revision: note.revision, reviewedAt: new Date().toISOString(), approved: true};
-    } else if (reviews[relative]) reviews[relative] = {...reviews[relative], approved: false};
+      reviews[key] = {revision: note.revision, reviewedAt: new Date().toISOString(), approved: true};
+    } else if (reviews[key]) reviews[key] = {...reviews[key], approved: false};
     const prepared = await prepareMarkdown(config, REVIEW_LEDGER_PATH, serializeReviewLedger(reviews), ledger?.revision || 'new');
     await commitMarkdown(config, prepared);
     return applyReview(note, reviews);

@@ -220,6 +220,18 @@ export async function semanticSearch(config, entries, query, {limit = 100, timeo
       db = await openCache(config);
       const status = {enabled: true, state: info.loaded ? 'ready' : 'sleeping', model: settings.model, ...info, indexedChunks: count(db, settings)};
       if (warmOnly) status.reason = 'Automatic retrieval uses cached query and document vectors only; it never performs inference or wakes the model.';
+      const rawQuery = String(query || '').trim();
+      const instruction = 'Instruct: Retrieve notes relevant to the query.\nQuery: ';
+      const queryText = boundedText(rawQuery, MAX_QUERY_BYTES - Buffer.byteLength(instruction));
+      const shortened = queryText.length < rawQuery.length;
+      const prompt = instruction + queryText, queryHash = `q:${hash(prompt)}`;
+      const qkey = `${settings.fingerprint}\n${queryHash}`;
+      const diskQuery = queryText ? loadVector(db, settings, queryHash) : null;
+      const cachedQuery = queryText ? (queryCache.get(qkey) || diskQuery) : null;
+      if (cachedQuery && !diskQuery) storeVectors(db, settings, [[queryHash, cachedQuery]]);
+      if (warmOnly && queryText && !cachedQuery) {
+        return {matches: [], status: {...status, state: info.loaded ? 'incomplete' : 'sleeping', reason: `Automatic retrieval uses cached query and document vectors only; semantic vectors are missing.${shortened ? ' Semantic query was shortened to fit the model context.' : ''}`}};
+      }
       let bytes = 0, incomplete = false; const chunks = [];
       for (const entry of entries) {
         bytes += Buffer.byteLength(String(entry.content || ''));
@@ -232,18 +244,9 @@ export async function semanticSearch(config, entries, query, {limit = 100, timeo
       for (const chunk of chunks) if (!unique.has(chunk.key)) unique.set(chunk.key, chunk);
       const vectors = new Map(), missing = [];
       for (const chunk of unique.values()) { const vector = loadVector(db, settings, chunk.key); if (vector) vectors.set(chunk.key, vector); else missing.push(chunk); }
-      const rawQuery = String(query || '').trim();
-      const instruction = 'Instruct: Retrieve notes relevant to the query.\nQuery: ';
-      const queryText = boundedText(rawQuery, MAX_QUERY_BYTES - Buffer.byteLength(instruction));
-      const shortened = queryText.length < rawQuery.length;
-      const prompt = instruction + queryText, queryHash = `q:${hash(prompt)}`;
-      const qkey = `${settings.fingerprint}\n${queryHash}`;
-      const diskQuery = queryText ? loadVector(db, settings, queryHash) : null;
-      const cachedQuery = queryText ? (queryCache.get(qkey) || diskQuery) : null;
-      if (cachedQuery && !diskQuery) storeVectors(db, settings, [[queryHash, cachedQuery]]);
       // Checking /api/ps cannot prevent an unload between that check and /api/embed.
       // Automatic callers therefore use cached vectors only, even if currently loaded.
-      if (warmOnly && (missing.length || (queryText && !cachedQuery))) return {matches: [], status: {...status, state: info.loaded ? 'incomplete' : 'sleeping', reason: `Automatic retrieval uses cached query and document vectors only; semantic vectors are missing.${shortened ? ' Semantic query was shortened to fit the model context.' : ''}`}};
+      if (warmOnly && missing.length) return {matches: [], status: {...status, state: info.loaded ? 'incomplete' : 'sleeping', reason: `Automatic retrieval uses cached query and document vectors only; semantic vectors are missing.${shortened ? ' Semantic query was shortened to fit the model context.' : ''}`}};
       for (let i = 0; i < missing.length; i += BATCH) {
         const batch = missing.slice(i, i + BATCH), result = await embed(settings, batch.map(chunk => chunk.text), deadline, warmOnly);
         const records = batch.map((chunk, index) => [chunk.key, result[index]]); storeVectors(db, settings, records);
