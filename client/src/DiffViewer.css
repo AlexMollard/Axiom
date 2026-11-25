@@ -1,0 +1,126 @@
+.diff-viewer {
+  display: grid;
+  gap: 8px;
+}
+
+.diff-toolbar {
+  display: flex;
+  justify-content: flex-end;
+}
+
+.diff-empty {
+  color: var(--muted);
+  font-size: 12px;
+  margin: 6px 0;
+}
+
+.diff-table {
+  max-height: 30rem;
+  overflow: auto;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface-inset);
+  font-family: 'JetBrains Mono Variable', monospace;
+  font-size: 12px;
+  line-height: 1.55;
+}
+
+.diff-row {
+  display: grid;
+  grid-template-columns: 38px 38px 18px minmax(0, 1fr);
+  align-items: start;
+  padding-right: 10px;
+}
+
+.diff-row-added {
+  background: rgba(151, 177, 141, 0.14);
+  color: #c7dec0;
+}
+
+.diff-row-removed {
+  background: rgba(226, 161, 143, 0.15);
+  color: var(--error);
+}
+
+.diff-row-context {
+  color: var(--fg-secondary);
+}
+
+.diff-row-empty {
+  background: rgba(255, 255, 255, 0.02);
+  color: var(--faint);
+}
+
+.diff-ln {
+  user-select: none;
+  text-align: right;
+  padding: 0 6px;
+  color: var(--faint);
+  font-variant-numeric: tabular-nums;
+}
+
+.diff-sig {
+  user-select: none;
+  text-align: center;
+  opacity: 0.85;
+}
+
+.diff-text {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.diff-expand-btn {
+  display: block;
+  width: 100%;
+  border: 0;
+  border-block: 1px solid var(--border-soft);
+  padding: 5px 10px;
+  background: var(--surface);
+  color: var(--accent);
+  font-family: 'Manrope Variable', sans-serif;
+  font-size: 11px;
+  font-weight: 700;
+  text-align: center;
+  cursor: pointer;
+}
+
+.diff-expand-btn:hover {
+  background: var(--surface-raised);
+  color: var(--accent-bright);
+}
+
+.diff-split-head {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  border-bottom: 1px solid var(--border);
+  background: var(--surface);
+  color: var(--muted);
+  font-family: 'Manrope Variable', sans-serif;
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.diff-split-head span {
+  padding: 6px 10px;
+}
+
+.diff-split-head span:last-child {
+  border-left: 1px solid var(--border-soft);
+}
+
+.diff-split-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+}
+
+.diff-split-cell {
+  display: grid;
+  grid-template-columns: 38px minmax(0, 1fr);
+  padding: 0 8px 0 0;
+  min-width: 0;
+}
+
+.diff-split-cell:last-child {
+  border-left: 1px solid var(--border-soft);
+}

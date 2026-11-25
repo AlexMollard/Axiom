@@ -68,4 +68,6 @@
 .cleanup-analysis p { line-height: 1.6; }
 .cleanup-analysis-actions { display: flex; flex-wrap: wrap; gap: 8px; }
 .cleanup-analysis-actions .button { max-width: 100%; white-space: normal; }
+.cleanup-previews-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 360px), 1fr)); gap: 12px; }
+.cleanup-compare { margin: 4px 0 8px; }
 @media (max-width: 700px) { .cleanup-note { align-items: stretch; flex-direction: column; } .cleanup-note-actions { justify-content: flex-start; } .cleanup-coverage dl { grid-template-columns: 1fr; } .cleanup-controls label { width: 100%; } .cleanup-controls select { width: 100%; } }

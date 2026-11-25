@@ -2,13 +2,14 @@ import React, { useEffect, useRef, useState } from 'react';
 import { ScanSearch, Trash2 } from 'lucide-react';
 import { DeleteNote } from './Management.jsx';
 import { decisionKey, readDecisions, writeDecisions, buildHandoff } from './cleanup-review.mjs';
-import { isDesktop, readBucketState, revealInExplorer, saveFileNative, writeBucketState } from './desktop-bridge.mjs';
+import { apiMutate, isDesktop, readBucketState, revealInExplorer, saveFileNative, writeBucketState } from './desktop-bridge.mjs';
 import CleanupReview from './CleanupReview.jsx';
 import CleanupAnalysis from './CleanupAnalysis.jsx';
 import './Cleanup.css';
 
 const categories = [['all', 'All'], ['duplicate', 'Duplicates'], ['merge', 'Merge suggestions'], ['empty', 'Empty'], ['stale', 'Stale']];
 const noteUrl = path => '/?note=' + encodeURIComponent(path);
+const scanCache = new Map();
 
 async function responseData(response) {
   const data = await response.json();
@@ -29,10 +30,10 @@ function semanticSummary(status) {
   return `${state}.${details.length ? ` ${details.join(' · ')}.` : ''}${status.reason ? ` ${status.reason}` : ''}`;
 }
 
-export default function Cleanup({ groups, vaultId, onCatalogChanged }) {
+export default function Cleanup({ groups, vaultId, onCatalogChanged, onOpenSplit }) {
   const [workspace, setWorkspace] = useState('');
   const [category, setCategory] = useState('all');
-  const [result, setResult] = useState(null);
+  const [result, setResult] = useState(() => scanCache.get(`${vaultId || ''}:`) || null);
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
   const [semantic, setSemantic] = useState(true);
@@ -113,17 +114,19 @@ export default function Cleanup({ groups, vaultId, onCatalogChanged }) {
     try {
       lexical = await responseData(await fetch('/api/cleanup' + (scope ? '?workspace=' + encodeURIComponent(scope) : ''), { signal: controller.signal }));
       if (!current()) return;
+      scanCache.set(`${vaultId || ''}:${scope}`, lexical);
       setResult(lexical);
       if (!semantic || !lexical.semantic?.enabled) return;
       setPhase('semantic');
-      const session = await responseData(await fetch('/api/editor-session', { credentials: 'same-origin', cache: 'no-store', signal: controller.signal }));
-      if (!session.token) throw new Error('Could not start a secure session. Refresh and try again.');
-      const data = await responseData(await fetch('/api/cleanup', {
-        method: 'POST', credentials: 'same-origin', signal: controller.signal,
-        headers: { 'Content-Type': 'application/json', 'X-Shared-Brain-CSRF': session.token },
-        body: JSON.stringify(scope ? { workspace: scope } : {}),
-      }));
-      if (current()) setResult(data);
+      const data = await apiMutate('/api/cleanup', {
+        method: 'POST',
+        signal: controller.signal,
+        body: scope ? { workspace: scope } : {},
+      });
+      if (current()) {
+        scanCache.set(`${vaultId || ''}:${scope}`, data);
+        setResult(data);
+      }
     } catch (e) {
       if (current()) {
         if (lexical) setSemanticError(e.message || 'Semantic comparison failed.');
@@ -134,7 +137,7 @@ export default function Cleanup({ groups, vaultId, onCatalogChanged }) {
     }
   }
   function changeWorkspace(value) {
-    request.current?.abort(); setBusy(false); setPhase(''); setError(''); setSemanticError(''); setResult(null); setVisible(20); setSelected(null); setWorkspace(value); setExpanded(null); setHandoff('');
+    request.current?.abort(); setBusy(false); setPhase(''); setError(''); setSemanticError(''); setResult(scanCache.get(`${vaultId || ''}:${value}`) || null); setVisible(20); setSelected(null); setWorkspace(value); setExpanded(null); setHandoff('');
   }
   const items = result?.items || [];
   const filtered = items.filter(item => (category === 'all' || item.category === category) && (decisionFilter === 'all' || (decisions[decisionKey(item)]?.decision || 'undecided') === decisionFilter));
@@ -181,13 +184,27 @@ export default function Cleanup({ groups, vaultId, onCatalogChanged }) {
           {item.evidence?.passages?.length > 0 && <div className="cleanup-evidence"><strong>Best-matching passages</strong>{item.evidence.passages.map((passage, index) => <blockquote key={index}><span>{passage.path}{passage.heading ? ` · ${passage.heading}` : ''}</span><p>{passage.excerpt}</p></blockquote>)}</div>}
           <div className="cleanup-notes">{item.notes.map(note => <div className="cleanup-note" key={note.path}>
             <div><a className="cleanup-note-title" href={noteUrl(note.path)}>{note.title}</a><span className="cleanup-path">{note.path}</span><span className="cleanup-note-meta">{[...new Set([note.project || 'global', note.owner, note.status, note.reviewStatus].filter(Boolean))].join(' · ')}</span><span className="cleanup-note-meta">Scan revision: {note.revision || 'unavailable'}</span></div>
-            <div className="cleanup-note-actions"><a className="button" href={noteUrl(note.path)}>Open / inspect</a>{!item.reviewOnly && note.cleanupBlockedReason === null ? <button type="button" className="button" onClick={() => setSelected(note)}><Trash2 size={15} aria-hidden="true" />Move to Trash</button> : <span className="cleanup-blocked">{item.reviewOnly ? 'Review only; compare sources before merging' : `Not available: ${note.cleanupBlockedReason || 'Protection status unavailable'}`}</span>}</div>
+            <div className="cleanup-note-actions"><a className="button" href={noteUrl(note.path)}>Open / inspect</a>{onOpenSplit && <button type="button" className="button" onClick={() => onOpenSplit({ kind: 'note', path: note.path })}>Open in split</button>}{!item.reviewOnly && note.cleanupBlockedReason === null ? <button type="button" className="button" onClick={() => setSelected(note)}><Trash2 size={15} aria-hidden="true" />Move to Trash</button> : <span className="cleanup-blocked">{item.reviewOnly ? 'Review only; compare sources before merging' : `Not available: ${note.cleanupBlockedReason || 'Protection status unavailable'}`}</span>}</div>
           </div>)}</div>
           <CleanupReview key={decisionKey(item)} item={item} record={decisions[decisionKey(item)]} expanded={expanded === decisionKey(item)} onExpand={() => setExpanded(expanded === decisionKey(item) ? null : decisionKey(item))} onChange={changes => updateDecision(item, changes)} />
         </article>)}</div>
         {visible < filtered.length && <button type="button" className="button cleanup-more" onClick={() => setVisible(value => value + 20)}>Show more ({filtered.length - visible} remaining)</button>}
       </>}
     </>}
-    {selected && <DeleteNote cleanup note={selected} onClose={() => setSelected(null)} onDeleted={() => { setSelected(null); onCatalogChanged(); scan(); }} />}
+    {selected && <DeleteNote cleanup note={selected} onClose={() => setSelected(null)} onDeleted={() => {
+      const deletedPath = selected.path;
+      setSelected(null);
+      setResult(prev => {
+        if (!prev) return prev;
+        const nextItems = prev.items
+          .map(item => ({ ...item, notes: item.notes.filter(n => n.path !== deletedPath) }))
+          .filter(item => ((item.category === 'merge' || item.category === 'duplicate') ? item.notes.length >= 2 : item.notes.length >= 1));
+        const nextCounts = nextItems.reduce((acc, it) => { acc[it.category] = (acc[it.category] || 0) + 1; return acc; }, { duplicate: 0, merge: 0, empty: 0, stale: 0 });
+        const next = { ...prev, items: nextItems, counts: nextCounts };
+        scanCache.set(`${vaultId || ''}:${workspace}`, next);
+        return next;
+      });
+      onCatalogChanged();
+    }} />}
   </section>;
 }

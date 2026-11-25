@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { useConfirm } from './ConfirmDialog.jsx';
 import { apiMutate } from './desktop-bridge.mjs';
+import DiffViewer from './DiffViewer.jsx';
 import './NoteHistory.css';
 
 async function request(url, options = {}) {
@@ -111,7 +112,7 @@ export default function NoteHistory({ note, onRestored }) {
         <p>Restoring bytes identical to a previously approved revision may regain its existing review status. The review ledger itself is unchanged.</p>
         {preview.integrity === 'legacy' && <p className="history-error" role="status">This older archive has no independent checksum, so its integrity cannot be verified.</p>}
         {preview.currentRevision !== note.revision && <p className="history-error" role="alert">The current note changed since it was opened. Refresh the note before restoring.</p>}
-        <pre className="history-diff">{preview.changes.length ? preview.changes.map((change, index) => <span key={index} className={`history-${change.type}`}>{change.type === 'added' ? '+' : change.type === 'removed' ? '-' : ' '}{change.text}{'\n'}</span>) : 'No differences.'}</pre>
+        <DiffViewer changes={preview.changes} emptyText="No differences." />
         <details><summary>View archived Markdown</summary><pre className="history-source">{preview.content}</pre></details>
         <button type="button" disabled={restoring || loading || preview.currentRevision !== note.revision} onClick={restore}>{restoring ? 'Restoring...' : 'Restore this version'}</button>
       </div>}

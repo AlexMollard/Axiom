@@ -1,5 +1,6 @@
 import React, { useEffect, useRef, useState } from 'react';
 import WorkspaceIcon, { registerWorkspaceIconNodes } from './WorkspaceIcon.jsx';
+import { apiMutate } from './desktop-bridge.mjs';
 
 async function get(url) {
   const response = await fetch(url);
@@ -8,12 +9,7 @@ async function get(url) {
   return data;
 }
 async function mutate(url, method, body) {
-  const { token } = await get('/api/editor-session');
-  if (!token) throw new Error('Could not start a secure session. Refresh and try again.');
-  const response = await fetch(url, { method, credentials: 'same-origin', headers: { 'Content-Type': 'application/json', 'X-Shared-Brain-CSRF': token }, body: JSON.stringify(body) });
-  const data = await response.json();
-  if (!response.ok) throw new Error(data.error || `Request failed (${response.status})`);
-  return data;
+  return apiMutate(url, { method, body });
 }
 function Dialog({ title, onClose, children }) {
   const ref = useRef(null);

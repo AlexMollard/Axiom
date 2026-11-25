@@ -1,6 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import { RefreshCw } from 'lucide-react';
 import { DiagnosticRefresh, useDiagnostic } from './DiagnosticRefresh.jsx';
+import { apiMutate } from './desktop-bridge.mjs';
 import './KnowledgeViews.css';
 
 async function get(url) {
@@ -29,11 +30,7 @@ export function WorkspaceOverview({ id, label, onOpenNote }) {
       const detail = await get('/api/workspace?id=' + encodeURIComponent(id));
       const pins = Array.isArray(detail.pins) ? detail.pins : [];
       const next = add ? [...new Set([...pins, path])] : pins.filter(item => item !== path);
-      const { token } = await get('/api/editor-session');
-      if (!token) throw new Error('Could not start a secure session. Refresh and try again.');
-      const response = await fetch('/api/workspace', { method: 'PUT', credentials: 'same-origin', headers: { 'Content-Type': 'application/json', 'X-Shared-Brain-CSRF': token }, body: JSON.stringify({ id, name: detail.name, icon: detail.icon, group: detail.group, expectedRevision: detail.revision, pins: next }) });
-      const result = await response.json();
-      if (!response.ok) throw new Error(result.error || `Request failed (${response.status})`);
+      await apiMutate('/api/workspace', { method: 'PUT', body: { id, name: detail.name, icon: detail.icon, group: detail.group, expectedRevision: detail.revision, pins: next } });
       setData(await get('/api/workspace-overview?id=' + encodeURIComponent(id)));
     } catch (e) { setError(e.message); } finally { setBusy(false); }
   }
@@ -66,11 +63,7 @@ function SemanticHealth() {
   async function reindex() {
     setBusy(true); setReindexing(true); setError('');
     try {
-      const { token } = await get('/api/editor-session');
-      if (!token) throw new Error('Could not start a secure session. Refresh and try again.');
-      const response = await fetch('/api/embeddings/reindex', { method: 'POST', credentials: 'same-origin', headers: { 'Content-Type': 'application/json', 'X-Shared-Brain-CSRF': token }, body: '{}' });
-      const result = await response.json();
-      if (!response.ok) throw new Error(result.error || `Request failed (${response.status})`);
+      const result = await apiMutate('/api/embeddings/reindex', { method: 'POST', body: {} });
       setStatus(result);
     } catch (e) { setError(e.message); } finally { setBusy(false); setReindexing(false); }
   }
