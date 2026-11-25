@@ -1,6 +1,6 @@
 import http from 'node:http';
 import net from 'node:net';
-import { readFile } from 'node:fs/promises';
+import { readFile, stat } from 'node:fs/promises';
 import { mkdirSync, readFileSync, writeFileSync, appendFileSync, statSync, realpathSync } from 'node:fs';
 import os from 'node:os';
 import { format } from 'node:util';
@@ -42,69 +42,108 @@ function noteHref(note, target, wiki = false) {
 }
 
 
+const sharedMd = new MarkdownIt({ html: false, linkify: false, breaks: false });
+sharedMd.inline.ruler.before('link', 'wikilink', (state, silent) => {
+  const start = state.pos;
+  if (state.src.slice(start, start + 2) !== '[[') return false;
+  const end = state.src.indexOf(']]', start + 2);
+  if (end < 0) return false;
+  const [target, ...label] = state.src.slice(start + 2, end).split('|');
+  if (!target.trim()) return false;
+  if (!silent) {
+    const { current, notes = [], graph = null } = state.env || {};
+    const trimmed = target.trim();
+    const note = trimmed.startsWith('#') ? notes.find(item => item.path === current) || {path: current} : resolveNote(trimmed, current, notes);
+    if (graph && target.trim().split('#')[0].split('?')[0] && !/^[a-z][a-z\d+.-]*:/i.test(target.trim()) && !target.trim().startsWith('//')) {
+      if (note && note.path !== current) graph.targets.add(note.path);
+      else if (!note) graph.unresolvedCount++;
+    }
+    if (note) {
+      const open = state.push('link_open', 'a', 1);
+      open.attrSet('href', noteHref(note, trimmed, true));
+    }
+    const text = state.push('text', '', 0);
+    text.content = label.join('|').trim() || target.trim();
+    if (note) state.push('link_close', 'a', -1);
+  }
+  state.pos = end + 2;
+  return true;
+});
+const originalSharedLink = sharedMd.renderer.rules.link_open || ((tokens, idx, options, env, self) => self.renderToken(tokens, idx, options));
+sharedMd.renderer.rules.link_open = (tokens, idx, options, env, self) => {
+  const token = tokens[idx];
+  const href = token.attrGet('href') || '';
+  const { current, notes = [], graph = null } = env || {};
+  if (!href.startsWith('/?note=') && /\.md(?:[?#]|$)/i.test(href) && !/^[a-z][a-z\d+.-]*:/i.test(href) && !href.startsWith('//')) {
+    const note = resolveNote(href, current, notes);
+    if (graph) {
+      if (note && note.path !== current) graph.targets.add(note.path);
+      else if (!note) graph.unresolvedCount++;
+    }
+    token.attrSet('href', note ? noteHref(note, href) : '#');
+  }
+  return originalSharedLink(tokens, idx, options, env, self);
+};
+// Remote and embedded content is not loaded by the reader.
+sharedMd.renderer.rules.image = (tokens, idx) => sharedMd.utils.escapeHtml(tokens[idx].content || 'Image');
+sharedMd.core.ruler.push('heading_ids', state => {
+  const used = state.env?.used || new Map();
+  for (let i = 0; i < state.tokens.length; i++) {
+    const token = state.tokens[i];
+    if (token.type !== 'heading_open') continue;
+    const text = (state.tokens[i + 1]?.children || []).map(child =>
+      ['text', 'code_inline', 'image'].includes(child.type) ? child.content :
+      ['softbreak', 'hardbreak'].includes(child.type) ? ' ' : '').join('');
+    const base = headingSlug(text);
+    const count = used.get(base) || 0;
+    used.set(base, count + 1);
+    token.attrSet('id', count ? `${base}-${count + 1}` : base);
+  }
+});
+
 export function renderMarkdown(content, current, notes, graph = null) {
-  const md = new MarkdownIt({ html: false, linkify: false, breaks: false });
-  md.inline.ruler.before('link', 'wikilink', (state, silent) => {
-    const start = state.pos;
-    if (state.src.slice(start, start + 2) !== '[[') return false;
-    const end = state.src.indexOf(']]', start + 2);
-    if (end < 0) return false;
-    const [target, ...label] = state.src.slice(start + 2, end).split('|');
-    if (!target.trim()) return false;
-    if (!silent) {
-      const trimmed = target.trim();
-      const note = trimmed.startsWith('#') ? notes.find(item => item.path === current) || {path: current} : resolveNote(trimmed, current, notes);
-      if (graph && target.trim().split('#')[0].split('?')[0] && !/^[a-z][a-z\d+.-]*:/i.test(target.trim()) && !target.trim().startsWith('//')) {
-        if (note && note.path !== current) graph.targets.add(note.path);
-        else if (!note) graph.unresolvedCount++;
-      }
-      if (note) {
-        const open = state.push('link_open', 'a', 1);
-        open.attrSet('href', noteHref(note, trimmed, true));
-      }
-      const text = state.push('text', '', 0);
-      text.content = label.join('|').trim() || target.trim();
-      if (note) state.push('link_close', 'a', -1);
-    }
-    state.pos = end + 2;
-    return true;
-  });
-  const originalLink = md.renderer.rules.link_open || ((tokens, idx, options, env, self) => self.renderToken(tokens, idx, options));
-  md.renderer.rules.link_open = (tokens, idx, options, env, self) => {
-    const token = tokens[idx];
-    const href = token.attrGet('href') || '';
-    if (!href.startsWith('/?note=') && /\.md(?:[?#]|$)/i.test(href) && !/^[a-z][a-z\d+.-]*:/i.test(href) && !href.startsWith('//')) {
-      const note = resolveNote(href, current, notes);
-      if (graph) {
-        if (note && note.path !== current) graph.targets.add(note.path);
-        else if (!note) graph.unresolvedCount++;
-      }
-      token.attrSet('href', note ? noteHref(note, href) : '#');
-    }
-    return originalLink(tokens, idx, options, env, self);
-  };
-  // Remote and embedded content is not loaded by the reader.
-  md.renderer.rules.image = (tokens, idx) => md.utils.escapeHtml(tokens[idx].content || 'Image');
-  const used = new Map();
-  md.core.ruler.push('heading_ids', state => {
-    for (let i = 0; i < state.tokens.length; i++) {
-      const token = state.tokens[i];
-      if (token.type !== 'heading_open') continue;
-      const text = (state.tokens[i + 1]?.children || []).map(child =>
-        ['text', 'code_inline', 'image'].includes(child.type) ? child.content :
-        ['softbreak', 'hardbreak'].includes(child.type) ? ' ' : '').join('');
-      const base = headingSlug(text);
-      const count = used.get(base) || 0;
-      used.set(base, count + 1);
-      token.attrSet('id', count ? `${base}-${count + 1}` : base);
-    }
-  });
+  const env = { current, notes, graph, used: new Map() };
   const body = content.replace(/^---\r?\n[\s\S]*?\r?\n---(?:\r?\n|$)/, '');
-  return sanitizeHtml(md.render(body), {
+  if (graph?.linksOnly) {
+    const tokens = sharedMd.parse(body, env);
+    for (const token of tokens) {
+      if (token.type !== 'inline' || !token.children) continue;
+      for (const child of token.children) {
+        if (child.type !== 'link_open') continue;
+        const href = child.attrGet('href') || '';
+        if (!href.startsWith('/?note=') && /\.md(?:[?#]|$)/i.test(href) && !/^[a-z][a-z\d+.-]*:/i.test(href) && !href.startsWith('//')) {
+          const note = resolveNote(href, current, notes);
+          if (note && note.path !== current) graph.targets.add(note.path);
+          else if (!note) graph.unresolvedCount++;
+        }
+      }
+    }
+    return '';
+  }
+  return sanitizeHtml(sharedMd.render(body, env), {
     allowedTags: ['p', 'br', 'hr', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'blockquote', 'pre', 'code', 'strong', 'em', 's', 'ul', 'ol', 'li', 'a', 'table', 'thead', 'tbody', 'tr', 'th', 'td'],
     allowedAttributes: { a: ['href', 'title'], h1: ['id'], h2: ['id'], h3: ['id'], h4: ['id'], h5: ['id'], h6: ['id'] },
     allowedSchemes: ['http', 'https', 'mailto'], allowProtocolRelative: false,
   });
+}
+
+async function maybeReloadConfig(config) {
+  if (!config.configPath) return;
+  try {
+    const info = await stat(config.configPath);
+    const stamp = `${info.mtimeMs}:${info.size}`;
+    if (stamp === config.configStamp) return;
+    const fresh = await loadConfig(config.configPath);
+    if (fresh.vault === config.vault && fresh.backupDir === config.backupDir) {
+      config.projects = fresh.projects;
+      config.workspaceNames = fresh.workspaceNames;
+      config.workspaceGroups = fresh.workspaceGroups;
+      config.workspacePins = fresh.workspacePins;
+      config.embeddings = fresh.embeddings;
+      config.backupRetention = fresh.backupRetention;
+      config.configStamp = fresh.configStamp;
+    }
+  } catch {}
 }
 
 async function readJson(req) {
@@ -227,6 +266,7 @@ export function createServer(config, configId = null) {
         return events.handleRequest(req, res, headers);
       }
       if (url.pathname === '/api/catalog') {
+        await maybeReloadConfig(config);
         const { assignments: workspaceIcons } = await readWorkspaceIcons(config);
         const workspaceIconNodes = await getWorkspaceIconNodes(Object.values(workspaceIcons));
         const workspaceNames = {global: config.workspaceNames?.global || 'General', __unmapped: config.workspaceNames?.__unmapped || 'Unmapped', ...Object.fromEntries(config.projects.map(({id, name}) => [id, name || id]))};
@@ -235,33 +275,31 @@ export function createServer(config, configId = null) {
         const usageTracking = await inventoryUsage(config, notes);
         return json(200, { notes: notes.map(note => ({...note, deleteBlockedReason: protectedDeletionReason(note.path)})), usageTracking, vaultName: path.basename(config.vault), vaultId: hash(config.vault), protection: 'rule-level', workspaceIcons, workspaceIconNodes, workspaceNames, workspaceGroups, projects: config.projects.map(({ id, name }) => ({ id, name: name || id, icon: workspaceIcons[id] || null, group: workspaceGroups[id] })) });
       }
-      if (url.pathname === '/api/workspace') return json(200, await workspaceDetail(config, url.searchParams.get('id')));
+      if (url.pathname === '/api/workspace') { await maybeReloadConfig(config); return json(200, await workspaceDetail(config, url.searchParams.get('id'))); }
       if (url.pathname === '/api/workspace-icons') return json(200, await searchWorkspaceIcons(config, url.searchParams.get('q') || '', Number(url.searchParams.get('limit') || 24)));
       if (url.pathname === '/api/workspace-icons/svg') {
         const names = (url.searchParams.get('names') || '').split(',').map(s => s.trim()).filter(Boolean).slice(0, 64);
         return send(200, 'application/json; charset=utf-8', JSON.stringify({ iconNodes: await getWorkspaceIconNodes(names) }), { 'Cache-Control': 'public, max-age=86400' });
       }
       if (url.pathname === '/api/trash') return json(200, await listTrash(config));
-      if (url.pathname === '/api/graph') return json(200, await buildWorkspaceGraph(config, url.searchParams.get('project'), renderMarkdown));
+      if (url.pathname === '/api/graph') { await maybeReloadConfig(config); return json(200, await buildWorkspaceGraph(config, url.searchParams.get('project'), renderMarkdown)); }
       if (url.pathname === '/api/review-diff') return json(200, await getReviewDiff(config, url.searchParams.get('path')));
       if (url.pathname === '/api/note-history') return json(200, await getNoteHistory(config, url.searchParams.get('path'), {offset: Number(url.searchParams.get('offset') ?? 0), limit: Number(url.searchParams.get('limit') ?? 30)}));
       if (url.pathname === '/api/note-history-revision') return json(200, await getNoteHistoryRevision(config, url.searchParams.get('path'), url.searchParams.get('id')));
       if (url.pathname === '/api/note-knowledge') return json(200, await getNoteKnowledge(config, url.searchParams.get('path')));
-      if (url.pathname === '/api/workspace-overview') return json(200, await getWorkspaceOverview(config, url.searchParams.get('id')));
-      if (url.pathname === '/api/memory-health') return json(200, await getMemoryHealth(config, renderMarkdown));
-      if (url.pathname === '/api/cleanup') return json(200, await getCleanup(config, url.searchParams.get('workspace'), renderMarkdown));
-      if (url.pathname === '/api/embeddings') return json(200, await embeddingStatus(config));
+      if (url.pathname === '/api/workspace-overview') { await maybeReloadConfig(config); return json(200, await getWorkspaceOverview(config, url.searchParams.get('id'))); }
+      if (url.pathname === '/api/memory-health') { await maybeReloadConfig(config); return json(200, await getMemoryHealth(config, renderMarkdown)); }
+      if (url.pathname === '/api/cleanup') { await maybeReloadConfig(config); return json(200, await getCleanup(config, url.searchParams.get('workspace'), renderMarkdown)); }
+      if (url.pathname === '/api/embeddings') { await maybeReloadConfig(config); return json(200, await embeddingStatus(config)); }
       if (url.pathname === '/api/harnesses') return json(200, await getHarnessStatus(config));
       if (url.pathname === '/api/recovery') return json(200, await getRecoveryStatus(config));
       if (url.pathname === '/api/note-usage') {
-        const result = await getNoteUsage(config, await catalog(config));
+        await maybeReloadConfig(config);
         const targetPath = url.searchParams.get('path');
-        if (targetPath !== null) {
-          return json(200, { tracking: result.tracking, note: result.notes.find(n => n.path === targetPath) || null });
-        }
-        return json(200, result);
+        return json(200, await getNoteUsage(config, await catalog(config), targetPath !== null ? { targetPath } : {}));
       }
       if (url.pathname === '/api/note') {
+        await maybeReloadConfig(config);
         const notePath = url.searchParams.get('path');
         if (!notePath) return json(400, { error: 'A note path is required' });
         const note = await readNote(config, notePath);
@@ -269,6 +307,7 @@ export function createServer(config, configId = null) {
         return json(200, { note, html: renderMarkdown(note.content, note.path, await catalog(config)) });
       }
       if (url.pathname === '/api/search') {
+        await maybeReloadConfig(config);
         const scope = url.searchParams.get('scope') ?? 'all';
         if (!['all', 'active'].includes(scope)) return json(400, {error: 'Search scope must be all or active.'});
         const mode = url.searchParams.get('mode') || 'hybrid';
@@ -344,8 +383,9 @@ if (isEntrypoint) {
     process.exit(1);
   });
   // libuv uses FILE_FLAG_FIRST_PIPE_INSTANCE; the kernel releases it on exit.
+  let guard = null;
   if (process.platform === 'win32') {
-    const guard = net.createServer(socket => socket.destroy());
+    guard = net.createServer(socket => socket.destroy());
     await new Promise((resolve, reject) => {
       guard.once('error', reject);
       guard.listen(`\\\\.\\pipe\\axiom-${identity}`, resolve);
@@ -363,7 +403,27 @@ if (isEntrypoint) {
     const result = await backup(config);
     console.log(`Backup: ${result.snapshot} (${result.files} files)`);
   };
-  await save();
-  setInterval(() => save().catch(error => console.error(`BACKUP FAILED: ${error.message}`)), 24 * 60 * 60 * 1000).unref();
+  try { await save(); } catch (error) { console.error(`STARTUP BACKUP FAILED: ${error.message}`); }
+  const interval = setInterval(() => save().catch(error => console.error(`BACKUP FAILED: ${error.message}`)), 24 * 60 * 60 * 1000).unref();
+  let shuttingDown = false;
+  const shutdown = signal => {
+    if (shuttingDown) return;
+    shuttingDown = true;
+    console.log(`Shared Brain shutting down on ${signal}`);
+    const fallback = setTimeout(() => process.exit(0), 3000);
+    fallback.unref?.();
+    clearInterval(interval);
+    server.closeAllConnections?.();
+    server.close(() => {
+      const finish = () => process.exit(0);
+      if (guard) {
+        try { guard.close(finish); } catch { finish(); }
+      } else {
+        finish();
+      }
+    });
+  };
+  process.once('SIGINT', () => shutdown('SIGINT'));
+  process.once('SIGTERM', () => shutdown('SIGTERM'));
   console.log(`Shared Brain: http://127.0.0.1:${config.port}`);
 }

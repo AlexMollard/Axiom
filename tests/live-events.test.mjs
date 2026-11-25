@@ -106,3 +106,55 @@ test('GET /api/graph?project=__all returns full-vault nodes with workspaceId', a
   assert.equal(body.nodes.find(n => n.path.endsWith('beta-note.md')).workspaceId, 'beta');
   assert.equal(body.nodes.find(n => n.path.endsWith('loose.md')).workspaceId, '__unmapped');
 });
+
+test('SSE retries stateDir watcher after delayed creation and emits usage events', { timeout: 10000 }, async t => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'axiom-sse-retry-'));
+  t.after(() => fs.rm(root, { recursive: true, force: true }));
+  const configPath = path.join(root, 'config.json');
+  const config = {
+    vault: path.join(root, 'vault'),
+    backupDir: path.join(root, 'backups'),
+    configPath,
+    projects: [],
+    port: 0,
+  };
+  await fs.mkdir(path.join(config.vault, 'Owner'), { recursive: true });
+  await fs.writeFile(path.join(config.vault, 'Owner', 'Policies.md'), '# Rules\nOk');
+  await fs.writeFile(configPath, JSON.stringify({ vault: config.vault, backupDir: config.backupDir }));
+
+  const server = createServer(config);
+  await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
+  config.port = server.address().port;
+  t.after(() => new Promise(resolve => { server.close(resolve); server.closeAllConnections?.(); }));
+
+  const { req, res } = await openSse(config.port, '/api/events');
+  assert.equal(res.statusCode, 200);
+  res.setEncoding('utf8');
+
+  let buffer = '';
+  const waitFor = (pattern, timeoutMs = 5000) => new Promise((resolve, reject) => {
+    if (pattern.test(buffer)) return resolve(buffer);
+    const timer = setTimeout(() => {
+      res.off('data', onData);
+      reject(new Error(`Timed out waiting for ${pattern} in:\n${buffer}`));
+    }, timeoutMs);
+    function onData(chunk) {
+      buffer += chunk;
+      if (pattern.test(buffer)) {
+        clearTimeout(timer);
+        res.off('data', onData);
+        resolve(buffer);
+      }
+    }
+    res.on('data', onData);
+  });
+
+  await waitFor(/event: connected\r?\ndata: \{"ok":true\}/);
+  const stateDir = path.join(root, '.state');
+  await fs.mkdir(stateDir, { recursive: true });
+  const usageEvent = await waitFor(/event: usage\r?\ndata: \{/, 4000);
+  assert.match(usageEvent, /event: usage/);
+
+  req.destroy();
+  res.destroy();
+});

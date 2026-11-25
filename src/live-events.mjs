@@ -20,6 +20,10 @@ export function createEventHub(config) {
   const pendingPaths = new Set();
   let vaultWatcher = null;
   let stateWatcher = null;
+  let vaultRetryTimer = null;
+  let stateRetryTimer = null;
+  let vaultRetries = 0;
+  let stateRetries = 0;
   let catalogTimer = null;
   let usageTimer = null;
   let pingTimer = null;
@@ -40,7 +44,7 @@ export function createEventHub(config) {
 
   function scheduleCatalog(filename) {
     if (closed || !isRelevantVaultChange(filename)) return;
-    if (filename) pendingPaths.add(normalizeRel(filename));
+    if (filename && pendingPaths.size < 256) pendingPaths.add(normalizeRel(filename));
     clearTimeout(catalogTimer);
     catalogTimer = setTimeout(() => {
       if (closed || clients.size === 0) return;
@@ -63,12 +67,85 @@ export function createEventHub(config) {
     usageTimer.unref?.();
   }
 
+  function scheduleVaultRetry() {
+    if (closed || clients.size === 0 || vaultRetryTimer) return;
+    const delay = Math.min(5000, 1000 * 2 ** vaultRetries++);
+    vaultRetryTimer = setTimeout(() => {
+      vaultRetryTimer = null;
+      startVaultWatcher();
+    }, delay);
+    vaultRetryTimer.unref?.();
+  }
+
+  function scheduleStateRetry() {
+    if (closed || clients.size === 0 || stateRetryTimer) return;
+    const delay = Math.min(5000, 1000 * 2 ** stateRetries++);
+    stateRetryTimer = setTimeout(() => {
+      stateRetryTimer = null;
+      startStateWatcher();
+    }, delay);
+    stateRetryTimer.unref?.();
+  }
+
+  function startVaultWatcher() {
+    if (closed || vaultWatcher || clients.size === 0) return;
+    try {
+      if (existsSync(config.vault)) {
+        vaultWatcher = watch(config.vault, { recursive: true }, (_eventType, filename) => {
+          scheduleCatalog(filename);
+        });
+        vaultRetries = 0;
+        vaultWatcher.on('error', () => {
+          try { vaultWatcher?.close(); } catch {}
+          vaultWatcher = null;
+          broadcast('catalog', { changedPaths: [], resync: true, timestamp: new Date().toISOString() });
+          scheduleVaultRetry();
+        });
+      } else {
+        scheduleVaultRetry();
+      }
+    } catch {
+      vaultWatcher = null;
+      scheduleVaultRetry();
+    }
+  }
+
+  function startStateWatcher() {
+    if (closed || stateWatcher || clients.size === 0) return;
+    const wasRetrying = stateRetries > 0;
+    try {
+      if (existsSync(stateDir)) {
+        stateWatcher = watch(stateDir, (_eventType, filename) => {
+          scheduleUsage(filename);
+        });
+        stateRetries = 0;
+        stateWatcher.on('error', () => {
+          try { stateWatcher?.close(); } catch {}
+          stateWatcher = null;
+          scheduleStateRetry();
+        });
+        if (wasRetrying) scheduleUsage('usage-resync');
+      } else {
+        scheduleStateRetry();
+      }
+    } catch {
+      stateWatcher = null;
+      scheduleStateRetry();
+    }
+  }
+
   function stopWatchers() {
     clearTimeout(catalogTimer);
     clearTimeout(usageTimer);
+    clearTimeout(vaultRetryTimer);
+    clearTimeout(stateRetryTimer);
     clearInterval(pingTimer);
     catalogTimer = null;
     usageTimer = null;
+    vaultRetryTimer = null;
+    stateRetryTimer = null;
+    vaultRetries = 0;
+    stateRetries = 0;
     pingTimer = null;
     pendingPaths.clear();
     try { vaultWatcher?.close(); } catch {}
@@ -78,45 +155,21 @@ export function createEventHub(config) {
   }
 
   function startWatchers() {
-    if (closed || vaultWatcher) return;
-    try {
-      if (existsSync(config.vault)) {
-        vaultWatcher = watch(config.vault, { recursive: true }, (_eventType, filename) => {
-          scheduleCatalog(filename);
-        });
-        vaultWatcher.on('error', () => {
-          try { vaultWatcher?.close(); } catch {}
-          vaultWatcher = null;
-        });
-      }
-    } catch {
-      vaultWatcher = null;
-    }
-
-    try {
-      if (existsSync(stateDir)) {
-        stateWatcher = watch(stateDir, (_eventType, filename) => {
-          scheduleUsage(filename);
-        });
-        stateWatcher.on('error', () => {
-          try { stateWatcher?.close(); } catch {}
-          stateWatcher = null;
-        });
-      }
-    } catch {
-      stateWatcher = null;
-    }
-
-    pingTimer = setInterval(() => {
-      for (const res of clients) {
-        if (res.destroyed || res.writableEnded) {
-          clients.delete(res);
-          continue;
+    if (closed) return;
+    startVaultWatcher();
+    startStateWatcher();
+    if (!pingTimer) {
+      pingTimer = setInterval(() => {
+        for (const res of clients) {
+          if (res.destroyed || res.writableEnded) {
+            clients.delete(res);
+            continue;
+          }
+          try { res.write(': ping\n\n'); } catch { clients.delete(res); }
         }
-        try { res.write(': ping\n\n'); } catch { clients.delete(res); }
-      }
-    }, 25000);
-    pingTimer.unref?.();
+      }, 25000);
+      pingTimer.unref?.();
+    }
   }
 
   function handleRequest(req, res, baseHeaders = {}) {
