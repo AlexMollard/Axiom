@@ -14,19 +14,12 @@
 .workspace-graph .graph-legend-item { display: inline-flex; align-items: center; gap: 6px; padding: 4px 9px; border: 1px solid var(--border); border-radius: 999px; background: var(--surface); color: var(--fg-secondary); font-size: 11px; cursor: pointer; }
 .workspace-graph .graph-legend-item[aria-pressed="true"] { border-color: var(--accent-border); background: var(--accent-surface); color: var(--accent-bright); }
 .workspace-graph .graph-legend-dot { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; }
-.workspace-graph .graph-main { display: grid; grid-template-columns: minmax(0, 1fr) 220px; border: 1px solid var(--border); border-radius: 12px; overflow: hidden; background: var(--surface-inset); }
+.workspace-graph .graph-main { display: grid; grid-template-columns: minmax(0, 1fr) 270px; border: 1px solid var(--border); border-radius: 12px; overflow: hidden; background: var(--surface-inset); }
 .workspace-graph .graph-canvas { display: block; width: 100%; height: clamp(460px, 65vh, 800px); min-width: 0; touch-action: none; cursor: grab; background-image: radial-gradient(var(--border) 0.7px, transparent 0.7px); background-size: 24px 24px; }
 .workspace-graph .graph-canvas:active { cursor: grabbing; }
 .workspace-graph .graph-canvas:focus-visible { outline: 2px solid var(--accent); outline-offset: -3px; }
-.workspace-graph .graph-canvas line { stroke: var(--accent); stroke-width: 1.2; opacity: .65; pointer-events: none; }
-.workspace-graph .graph-node { cursor: pointer; }
-.workspace-graph .graph-node .graph-hit { fill: transparent; stroke: none; }
-.workspace-graph .graph-node .graph-dot { fill: var(--accent); stroke: var(--surface-inset); stroke-width: 2; pointer-events: none; }
-.workspace-graph .graph-node.graph-external .graph-dot { fill: var(--surface-inset); stroke: var(--accent); stroke-width: 2; stroke-dasharray: 3 2; }
-.workspace-graph .graph-node.graph-selected .graph-dot, .workspace-graph .graph-node:focus .graph-dot { fill: var(--accent-bright); stroke: var(--fg); stroke-width: 3; }
-.workspace-graph .graph-node text { fill: var(--fg); paint-order: stroke; stroke: var(--surface-inset); stroke-width: .35em; stroke-linejoin: round; pointer-events: none; }
-.workspace-graph .graph-dim { opacity: .15 !important; }
 .workspace-graph .graph-inspector { min-width: 0; max-height: clamp(460px, 65vh, 800px); overflow: auto; padding: 20px; border-left: 1px solid var(--border); color: var(--fg-secondary); font-size: 12px; overflow-wrap: anywhere; }
+.workspace-graph .graph-inspector-actions { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 10px; }
 .workspace-graph .graph-inspector h3 { color: var(--fg); margin: 7px 0; }
 .workspace-graph .graph-inspector h4 { margin: 18px 0 6px; color: var(--muted); }
 .workspace-graph .graph-inspector > button:not(.graph-link) { display: inline-flex; align-items: center; gap: 6px; }

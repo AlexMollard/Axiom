@@ -1,23 +1,21 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { ChevronDown } from 'lucide-react';
+import { useCallback, useDeferredValue, useEffect, useMemo, useRef, useState } from 'react';
 import CodeMirror from '@uiw/react-codemirror';
 import { markdown } from '@codemirror/lang-markdown';
 import { autocompletion } from '@codemirror/autocomplete';
 import { EditorView, keymap } from '@codemirror/view';
 import { HighlightStyle, syntaxHighlighting } from '@codemirror/language';
 import { tags } from '@lezer/highlight';
-import { diffLines } from 'diff';
 import { draftKey, readDraft, writeDraft, discardDraft } from './editor-drafts.mjs';
 import { renderLocalMarkdown } from './markdown-preview.mjs';
+import { publishEditorStats } from './editor-stats-store.mjs';
 import { useConfirm } from './ConfirmDialog.jsx';
+import OpenInMenu from './OpenInMenu.jsx';
+import DiffViewer from './DiffViewer.jsx';
 import {
   apiMutate,
   deleteBucketState,
   isDesktop,
-  openInObsidian,
-  openInVscode,
   readBucketState,
-  revealInExplorer,
   writeBucketState,
 } from './desktop-bridge.mjs';
 import './Editor.css';
@@ -32,6 +30,44 @@ function filenameError(title) {
   if (/[. ]$/.test(title)) return 'The filename cannot end in a dot or space.';
   if (/^(con|prn|aux|nul|com[1-9]|lpt[1-9])(?:\.|$)/i.test(title)) return 'That filename is reserved by Windows.';
   return '';
+}
+
+function parseFrontmatterFields(text) {
+  const match = /^---\n([\s\S]*?)\n---(?:\n|$)/.exec(text || '');
+  const fields = { project: '', status: '', kind: '', source: '' };
+  if (!match) return { hasFm: false, fields };
+  for (const line of match[1].split('\n')) {
+    const m = /^([a-zA-Z0-9_-]+):\s*(.*)$/.exec(line);
+    if (!m) continue;
+    const key = m[1];
+    if (key in fields) fields[key] = m[2].trim();
+  }
+  return { hasFm: true, fields };
+}
+
+function setFrontmatterField(text, key, value) {
+  const clean = normalize(text);
+  const trimmed = value.trim();
+  const match = /^---\n([\s\S]*?)\n---(\n|$)/.exec(clean);
+  if (!match) {
+    if (!trimmed) return clean;
+    return `---\n${key}: ${trimmed}\n---\n${clean}`;
+  }
+  const lines = match[1].split('\n');
+  let replaced = false;
+  const nextLines = [];
+  for (const line of lines) {
+    if (new RegExp(`^${key}:\\s*`).test(line)) {
+      replaced = true;
+      if (trimmed) nextLines.push(`${key}: ${trimmed}`);
+    } else {
+      nextLines.push(line);
+    }
+  }
+  if (!replaced && trimmed) nextLines.push(`${key}: ${trimmed}`);
+  const rest = clean.slice(match[0].length);
+  if (!nextLines.length) return rest;
+  return `---\n${nextLines.join('\n')}\n---\n${rest}`;
 }
 
 async function responseJson(response) {
@@ -99,16 +135,18 @@ function toggleLinePrefix(view, prefix) {
 export default function MarkdownEditor({
   initialNote,
   notes = [],
+  groups = [],
   vaultName,
   vaultId,
   externalChanged = false,
   onSaved,
   onDirtyChange,
-  onStatsChange,
   onCancel,
+  onOpenSplit,
 }) {
   const [note, setNote] = useState(initialNote);
   const [title, setTitle] = useState('');
+  const [folder, setFolder] = useState('Owner/Notes');
   const [content, setContent] = useState(() => normalize(initialNote?.content));
   const [baseline, setBaseline] = useState(() => normalize(initialNote?.content));
   const [mode, setMode] = useState('split');
@@ -117,12 +155,15 @@ export default function MarkdownEditor({
   const [saving, setSaving] = useState(false);
   const [reloading, setReloading] = useState(false);
   const [syncScroll, setSyncScroll] = useState(true);
-  const [cursorPos, setCursorPos] = useState({ line: 1, col: 1 });
+  const [relatedOpen, setRelatedOpen] = useState(false);
+  const [relatedState, setRelatedState] = useState({ loading: false, items: [], error: '' });
   const busy = useRef(false);
   const previewBodyRef = useRef(null);
   const editorViewRef = useRef(null);
   const notesRef = useRef(notes);
   notesRef.current = notes;
+  const cursorRef = useRef({ line: 1, col: 1 });
+  const wordsRef = useRef(content.trim() ? content.trim().split(/\s+/).length : 0);
   const { confirm, dialog } = useConfirm();
 
   const storageKey = useMemo(() => draftKey(vaultId, initialNote?.path || '\0new-note'), [vaultId, initialNote?.path]);
@@ -135,45 +176,31 @@ export default function MarkdownEditor({
   const [storageError, setStorageError] = useState('');
   const [latestComparison, setLatestComparison] = useState(null);
   const [copyStatus, setCopyStatus] = useState('');
-  const [openMenuOpen, setOpenMenuOpen] = useState(false);
-  const openMenuRef = useRef(null);
   const copyTimer = useRef(null);
   const suppressDraftFlush = useRef(false);
-
-  useEffect(() => {
-    if (!openMenuOpen) return;
-    const onDown = e => {
-      if (openMenuRef.current && !openMenuRef.current.contains(e.target)) setOpenMenuOpen(false);
-    };
-    const onKey = e => {
-      if (e.key === 'Escape') setOpenMenuOpen(false);
-    };
-    window.addEventListener('mousedown', onDown);
-    window.addEventListener('keydown', onKey);
-    return () => {
-      window.removeEventListener('mousedown', onDown);
-      window.removeEventListener('keydown', onKey);
-    };
-  }, [openMenuOpen]);
+  const saveActionRef = useRef(null);
 
   useEffect(() => () => clearTimeout(copyTimer.current), []);
   const hadDirtyDraft = useRef(false);
   const dirty = content !== baseline || (!note && title !== '');
   const dirtyRef = useRef(dirty);
-  const path = note?.path || `Owner/Notes/${title}.md`;
+  const path = note?.path || `${folder}/${title}.md`;
   const latestDraft = useRef(null);
   latestDraft.current = { key: storageKey, eligible: dirty && !stored.draft && !stored.error, draft: { title, content, baseline, revision: note?.revision || 'new' } };
 
   useEffect(() => {
-    const words = content.trim() ? content.trim().split(/\s+/).length : 0;
-    onStatsChange?.({
-      words,
-      chars: content.length,
-      line: cursorPos.line,
-      col: cursorPos.col,
-      revision: note?.revision || '',
-    });
-  }, [content, cursorPos, note?.revision, onStatsChange]);
+    const handle = setTimeout(() => {
+      wordsRef.current = content.trim() ? content.trim().split(/\s+/).length : 0;
+      publishEditorStats({
+        words: wordsRef.current,
+        chars: content.length,
+        line: cursorRef.current.line,
+        col: cursorRef.current.col,
+        revision: note?.revision || '',
+      });
+    }, 150);
+    return () => clearTimeout(handle);
+  }, [content, note?.revision]);
 
   useEffect(() => {
     if (!isDesktop() || !storageKey) return;
@@ -225,26 +252,29 @@ export default function MarkdownEditor({
       EditorView.lineWrapping,
       autocompletion({ override: [wikilinkSource], activateOnTyping: true }),
       keymap.of([
-        {
-          key: 'Mod-b',
-          run: view => wrapSelection(view, '**', '**', 'bold'),
-        },
-        {
-          key: 'Mod-i',
-          run: view => wrapSelection(view, '*', '*', 'italic'),
-        },
+        { key: 'Mod-b', run: view => wrapSelection(view, '**', '**', 'bold') },
+        { key: 'Mod-i', run: view => wrapSelection(view, '*', '*', 'italic') },
+        { key: 'Mod-k', run: view => wrapSelection(view, '[', '](https://)', 'link text') },
+        { key: 'Mod-Shift-s', run: () => { saveActionRef.current?.(true); return true; } },
       ]),
       EditorView.updateListener.of(update => {
         if (update.selectionSet || update.docChanged) {
           const pos = update.state.selection.main.head;
           const line = update.state.doc.lineAt(pos);
-          setCursorPos({ line: line.number, col: pos - line.from + 1 });
+          cursorRef.current = { line: line.number, col: pos - line.from + 1 };
+          publishEditorStats({
+            words: wordsRef.current,
+            chars: update.state.doc.length,
+            line: cursorRef.current.line,
+            col: cursorRef.current.col,
+            revision: note?.revision || '',
+          });
         }
       }),
       EditorView.contentAttributes.of({ 'aria-label': 'Markdown source' }),
       ...(nonce ? [EditorView.cspNonce.of(nonce)] : []),
     ];
-  }, []);
+  }, [note?.revision]);
 
   const reportDirty = useCallback(value => {
     if (dirtyRef.current !== value) {
@@ -324,7 +354,7 @@ export default function MarkdownEditor({
     setStored({});
     reportDirty(true);
     if (stale) {
-      setConflict(note?.path || `Owner/Notes/${draft.title}.md`);
+      setConflict(note?.path || path);
       setError('This draft was based on an older revision. Copy or diff your changes before reloading the latest note; saving is blocked to protect the current version.');
     }
   };
@@ -375,34 +405,32 @@ export default function MarkdownEditor({
     }
   };
 
-  const copyWikilink = async () => {
-    const linkTarget = note ? `[[${note.path.replace(/\.md$/i, '')}]]` : `[[Owner/Notes/${title}]]`;
-    try {
-      await navigator.clipboard.writeText(linkTarget);
-      showCopyStatus(`Copied ${linkTarget}`);
-    } catch {}
-  };
-
+  const deferredContent = useDeferredValue(content);
   const renderedPreview = useMemo(() => {
-    if (mode === 'edit' || !content.trim()) return '';
-    return renderLocalMarkdown(content, path, notes);
-  }, [content, mode, path, notes]);
+    if (mode === 'edit' || !deferredContent.trim()) return '';
+    return renderLocalMarkdown(deferredContent, path, notes);
+  }, [deferredContent, mode, path, notes]);
 
-  const conflictHunks = useMemo(() => {
-    if (latestComparison === null) return [];
-    const parts = diffLines(latestComparison, content);
-    const lines = [];
-    for (const part of parts) {
-      const type = part.added ? 'added' : part.removed ? 'removed' : 'context';
-      const rawLines = part.value.replace(/\n$/, '').split('\n');
-      for (const line of rawLines) {
-        lines.push({ type, text: line });
-      }
+  const fm = useMemo(() => parseFrontmatterFields(content), [content]);
+
+  const loadRelatedNotes = useCallback(async () => {
+    setRelatedState(prev => ({ ...prev, loading: true, error: '' }));
+    try {
+      const res = await apiMutate('/api/capture-suggestions', {
+        method: 'POST',
+        body: {
+          path,
+          content,
+          ...(fm.fields.project ? { workspace: fm.fields.project } : {}),
+        },
+      });
+      setRelatedState({ loading: false, items: res.items || [], error: '' });
+    } catch (err) {
+      setRelatedState({ loading: false, items: [], error: err.message || 'Could not check related notes.' });
     }
-    return lines;
-  }, [latestComparison, content]);
+  }, [path, content, fm.fields.project]);
 
-  const save = useCallback(async () => {
+  const save = useCallback(async (exitAfter = false) => {
     if (busy.current || saving || conflict || stored.draft || stored.error) return;
     const invalid = !note && filenameError(title);
     if (invalid) { setError(invalid); return; }
@@ -423,7 +451,7 @@ export default function MarkdownEditor({
       setConflict(false);
       setLatestComparison(null);
       reportDirty(false);
-      onSaved(result.note, result.html);
+      onSaved(result.note, result.html, exitAfter);
     } catch (err) {
       setError(err.message || 'Could not save your note. Your draft is unchanged.');
       if (err.status === 409) setConflict(path);
@@ -432,12 +460,13 @@ export default function MarkdownEditor({
       setSaving(false);
     }
   }, [conflict, content, note, onSaved, path, removeDraftNow, reportDirty, saving, title, stored, storageKey]);
+  saveActionRef.current = save;
 
   useEffect(() => {
     const shortcut = event => {
       if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 's') {
         event.preventDefault();
-        save();
+        save(event.shiftKey);
       }
     };
     window.addEventListener('keydown', shortcut);
@@ -493,8 +522,21 @@ export default function MarkdownEditor({
     return () => scroller.removeEventListener('scroll', onScroll);
   }, [syncScroll, mode]);
 
+  const updateFrontmatter = (key, value) => {
+    const next = setFrontmatterField(content, key, value);
+    setContent(next);
+    reportDirty(next !== baseline || (!note && title !== ''));
+  };
+
   const locked = saving || reloading;
-  const obsidian = note && `obsidian://open?vault=${encodeURIComponent(vaultName || '')}&file=${encodeURIComponent(note.path)}`;
+  const folderOptions = [
+    { value: 'Owner/Notes', label: 'Owner/Notes (Personal)' },
+    { value: 'Owner', label: 'Owner (Root)' },
+    { value: 'Agents/Memory', label: 'Agents/Memory (General)' },
+    ...groups
+      .filter(g => g.id !== 'global' && g.id !== '__unmapped')
+      .map(g => ({ value: `Agents/Memory/Projects/${g.id}`, label: `Agents/Memory/Projects/${g.id}` })),
+  ];
 
   return (
     <section className="markdown-editor" aria-label="Markdown editor">
@@ -503,36 +545,14 @@ export default function MarkdownEditor({
         <div>
           <p className="editor-eyebrow">{note ? 'EDIT NOTE' : 'NEW NOTE'}</p>
           <h1>{note ? note.title : 'Create a note'}</h1>
-          <p className="editor-path">{note ? note.path : 'Owner / Notes'}</p>
+          <p className="editor-path">{note ? note.path : path}</p>
         </div>
         <div className="editor-actions">
           {note && (
-            isDesktop() ? (
-              <div className="action-menu" ref={openMenuRef}>
-                <button
-                  type="button"
-                  className="editor-button"
-                  aria-haspopup="menu"
-                  aria-expanded={openMenuOpen}
-                  onClick={() => setOpenMenuOpen(v => !v)}
-                >
-                  Open in <ChevronDown size={14} aria-hidden="true" />
-                </button>
-                {openMenuOpen && (
-                  <div className="action-menu-popover" role="menu">
-                    <button type="button" role="menuitem" onClick={() => { openInObsidian(note.path, vaultName); setOpenMenuOpen(false); }}>Obsidian</button>
-                    <button type="button" role="menuitem" onClick={() => { openInVscode(note.path); setOpenMenuOpen(false); }}>VS Code</button>
-                    <button type="button" role="menuitem" onClick={() => { revealInExplorer('note', note.path); setOpenMenuOpen(false); }}>Reveal in Explorer</button>
-                    <button type="button" role="menuitem" onClick={() => { copyWikilink(); setOpenMenuOpen(false); }}>Copy wikilink</button>
-                  </div>
-                )}
-              </div>
-            ) : (
-              obsidian && <a className="editor-button" href={obsidian}>Open in Obsidian</a>
-            )
+            <OpenInMenu path={note.path} title={note.title} vaultName={vaultName} onOpenSplit={onOpenSplit} className="editor-button" />
           )}
           <button className="editor-button" type="button" onClick={onCancel} disabled={locked}>{note && !dirty ? 'Done' : 'Cancel'}</button>
-          <button className="editor-button editor-button-primary" type="button" onClick={save} disabled={locked || conflict || !dirty || !!stored.draft || !!stored.error}>{saving ? 'Saving…' : 'Save note'}</button>
+          <button className="editor-button editor-button-primary" type="button" onClick={() => save(false)} disabled={locked || conflict || !dirty || !!stored.draft || !!stored.error}>{saving ? 'Saving…' : 'Save note'}</button>
         </div>
       </header>
       <p className="editor-ownership">{note?.owner === 'agent' ? 'Agent memory · editing this note does not turn it into owner policy.' : 'Your note · this is your authoring space. Agents remain restricted to their own notes.'}</p>
@@ -553,27 +573,106 @@ export default function MarkdownEditor({
       {storageError && <div className="editor-alert" role="alert"><span>Local draft storage: {storageError}</span></div>}
       {!note && (
         <div className="editor-filename">
-          <label htmlFor="editor-filename">Filename</label>
-          <div className="editor-filename-field">
-            <input
-              id="editor-filename"
-              value={title}
-              maxLength={120}
-              disabled={locked}
-              onChange={event => {
-                const value = event.target.value;
-                setTitle(value);
-                if (conflict && value !== title) { setConflict(false); setError(''); }
-                reportDirty(content !== baseline || value !== '');
-              }}
-              placeholder="Name your note"
-              autoComplete="off"
-            />
-            <span>.md</span>
+          <div className="editor-filename-grid">
+            <div>
+              <label htmlFor="editor-filename">Filename</label>
+              <div className="editor-filename-field">
+                <input
+                  id="editor-filename"
+                  value={title}
+                  maxLength={120}
+                  disabled={locked}
+                  onChange={event => {
+                    const value = event.target.value;
+                    setTitle(value);
+                    if (conflict && value !== title) { setConflict(false); setError(''); }
+                    reportDirty(content !== baseline || value !== '');
+                  }}
+                  placeholder="Name your note"
+                  autoComplete="off"
+                />
+                <span>.md</span>
+              </div>
+            </div>
+            <label className="editor-folder-label">
+              Folder
+              <select value={folder} disabled={locked} onChange={e => setFolder(e.target.value)}>
+                {folderOptions.map(opt => <option key={opt.value} value={opt.value}>{opt.label}</option>)}
+              </select>
+            </label>
           </div>
-          <p>Saved in Owner/Notes. The filename is used exactly as entered.</p>
+          <p>Saved in {folder}. The filename is used exactly as entered.</p>
         </div>
       )}
+      <div className="editor-extras">
+        <details className="editor-frontmatter">
+          <summary>Frontmatter metadata {fm.hasFm ? '(present)' : '(none)'}</summary>
+          <div className="editor-frontmatter-grid">
+            <label>
+              Project
+              <input value={fm.fields.project} disabled={locked} placeholder="global" onChange={e => updateFrontmatter('project', e.target.value)} />
+            </label>
+            <label>
+              Status
+              <select value={fm.fields.status} disabled={locked} onChange={e => updateFrontmatter('status', e.target.value)}>
+                <option value="">Unset</option>
+                <option value="current">current</option>
+                <option value="superseded">superseded</option>
+                <option value="archived">archived</option>
+                <option value="stale">stale</option>
+              </select>
+            </label>
+            <label>
+              Kind
+              <select value={fm.fields.kind} disabled={locked} onChange={e => updateFrontmatter('kind', e.target.value)}>
+                <option value="">Unset</option>
+                <option value="note">note</option>
+                <option value="decision">decision</option>
+                <option value="proposal">proposal</option>
+              </select>
+            </label>
+            <label>
+              Source
+              <input value={fm.fields.source} disabled={locked} placeholder="file path or URL" onChange={e => updateFrontmatter('source', e.target.value)} />
+            </label>
+          </div>
+        </details>
+        <details
+          className="editor-related"
+          open={relatedOpen}
+          onToggle={e => {
+            const nextOpen = e.currentTarget.open;
+            setRelatedOpen(nextOpen);
+            if (nextOpen && !relatedState.items.length && !relatedState.loading) loadRelatedNotes();
+          }}
+        >
+          <summary>Related / overlapping notes</summary>
+          <div className="editor-related-body">
+            <button type="button" className="button" onClick={loadRelatedNotes} disabled={relatedState.loading || !content.trim()}>
+              {relatedState.loading ? 'Checking...' : 'Check related notes'}
+            </button>
+            {relatedState.error && <p className="management-error" role="alert">{relatedState.error}</p>}
+            {!relatedState.loading && !relatedState.items.length && <p className="muted">No strong overlap suggestions yet.</p>}
+            {relatedState.items.length > 0 && (
+              <ul className="editor-related-list">
+                {relatedState.items.map(item => (
+                  <li key={item.note.path}>
+                    <div>
+                      <strong>{item.note.title}</strong>
+                      <small>{item.note.path} · {item.reasons.join(', ')}</small>
+                    </div>
+                    {onOpenSplit && (
+                      <button type="button" className="button" onClick={() => onOpenSplit({ kind: 'note', path: item.note.path })}>
+                        Open in split
+                      </button>
+                    )}
+                  </li>
+                ))}
+              </ul>
+            )}
+          </div>
+        </details>
+      </div>
       <div className="editor-toolbar">
         <div className="editor-modes" role="group" aria-label="Editor view">
           {['edit', 'split', 'preview'].map(item => <button key={item} type="button" aria-pressed={mode === item} onClick={() => setMode(item)}>{item[0].toUpperCase() + item.slice(1)}</button>)}
@@ -584,7 +683,7 @@ export default function MarkdownEditor({
             <span>Sync scroll</span>
           </label>
         )}
-        <span className="editor-status" role="status">{saving ? 'Saving…' : error ? 'Error' : dirty ? 'Unsaved changes' : note ? 'Saved' : 'New draft'} <span className="editor-shortcut">· Ctrl/⌘ S to save · Type [[ to link</span></span>
+        <span className="editor-status" role="status">{saving ? 'Saving…' : error ? 'Error' : dirty ? 'Unsaved changes' : note ? 'Saved' : 'New draft'} <span className="editor-shortcut">· Ctrl+S save · Ctrl+Shift+S save &amp; exit · [[ to link</span></span>
       </div>
       {mode !== 'preview' && (
         <div className="editor-format-bar" role="toolbar" aria-label="Markdown formatting">
@@ -593,6 +692,7 @@ export default function MarkdownEditor({
           <button type="button" className="editor-format-btn" onClick={() => toggleLinePrefix(editorViewRef.current, '### ')}>H3</button>
           <button type="button" className="editor-format-btn" title="Bold (Ctrl+B)" onClick={() => wrapSelection(editorViewRef.current, '**', '**', 'bold')}>Bold</button>
           <button type="button" className="editor-format-btn" title="Italic (Ctrl+I)" onClick={() => wrapSelection(editorViewRef.current, '*', '*', 'italic')}>Italic</button>
+          <button type="button" className="editor-format-btn" title="Link (Ctrl+K)" onClick={() => wrapSelection(editorViewRef.current, '[', '](https://)', 'link')}>Link</button>
           <button type="button" className="editor-format-btn" onClick={() => wrapSelection(editorViewRef.current, '`', '`', 'code')}>Code</button>
           <button type="button" className="editor-format-btn" onClick={() => wrapSelection(editorViewRef.current, '```\n', '\n```', 'code')}>Block</button>
           <button type="button" className="editor-format-btn" onClick={() => toggleLinePrefix(editorViewRef.current, '- ')}>List</button>
@@ -616,13 +716,7 @@ export default function MarkdownEditor({
       {latestComparison !== null && (
         <section className="editor-comparison" aria-label="Draft and latest note comparison">
           <p>Line diff comparing latest on disk (-) against your current draft (+). Reloading discards your draft; copy it first if needed.</p>
-          <pre className="editor-diff-lines">
-            {conflictHunks.length ? conflictHunks.map((line, i) => (
-              <span key={i} className={`editor-diff-${line.type}`}>
-                {line.type === 'added' ? '+' : line.type === 'removed' ? '-' : ' '}{line.text}
-              </span>
-            )) : 'No differences.'}
-          </pre>
+          <DiffViewer beforeText={latestComparison} afterText={content} leftTitle="On disk" rightTitle="Your draft" allowSideBySide />
         </section>
       )}
       {copyStatus && <p className="muted" role="status">{copyStatus}</p>}
@@ -652,7 +746,16 @@ export default function MarkdownEditor({
             <div ref={previewBodyRef} className="editor-preview-body">
               {!content.trim()
                 ? <p className="editor-preview-empty">Your preview will appear here as you write.</p>
-                : <article className="editor-rendered" onClick={e => { if (e.target.closest('a[href]')) { e.preventDefault(); e.stopPropagation(); } }} dangerouslySetInnerHTML={{ __html: renderedPreview }} />}
+                : <article className="editor-rendered" onClick={e => {
+                    const link = e.target.closest('a[href]');
+                    if (!link) return;
+                    e.preventDefault();
+                    e.stopPropagation();
+                    const url = new URL(link.href, location.href);
+                    if (url.origin === location.origin && url.pathname === '/' && url.searchParams.has('note') && onOpenSplit) {
+                      onOpenSplit({ kind: 'note', path: url.searchParams.get('note') });
+                    }
+                  }} dangerouslySetInnerHTML={{ __html: renderedPreview }} />}
             </div>
           </div>
         )}

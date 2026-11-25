@@ -14,6 +14,8 @@ test('renderLocalMarkdown resolves wikilinks, relative links, heading ids, and s
     '---',
     '# Heading',
     '## Heading',
+    '- [x] Done task',
+    '- [ ] Open task',
     '[[Setup#Step One]] and [home](../../Home.md#top) and [bad](javascript:alert(1))',
     '<script>alert("xss")</script>',
     '![alt text](https://example.com/pic.png)',
@@ -22,6 +24,8 @@ test('renderLocalMarkdown resolves wikilinks, relative links, heading ids, and s
   const html = renderLocalMarkdown(md, 'Agents/Memory/Projects/alpha/Index.md', notes);
   assert.match(html, /id="heading"/);
   assert.match(html, /id="heading-2"/);
+  assert.match(html, /<input type="checkbox" class="task-list-checkbox" checked disabled>/);
+  assert.match(html, /<input type="checkbox" class="task-list-checkbox" disabled>/);
   assert.match(html, /href="\/\?note=Agents%2FMemory%2FProjects%2Falpha%2FSetup\.md#step-one"/);
   assert.match(html, /href="\/\?note=Home\.md#top"/);
   assert.doesNotMatch(html, /href="javascript:/i);

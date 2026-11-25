@@ -12,8 +12,23 @@
 .markdown-editor button:disabled { opacity: .55; cursor: not-allowed; }
 .markdown-editor button:focus-visible, .markdown-editor a:focus-visible, .markdown-editor input:focus-visible { outline: 2px solid var(--accent-bright); outline-offset: 2px; }
 .editor-ownership { margin: 0 0 20px; padding: 12px 15px; border: 1px solid var(--accent-border); border-radius: 9px; background: var(--accent-surface); color: var(--fg-secondary); font-size: .8rem; line-height: 1.55; }
-.editor-filename { max-width: 560px; margin: 0 0 22px; }
+.editor-filename { max-width: 720px; margin: 0 0 18px; }
+.editor-filename-grid { display: grid; grid-template-columns: minmax(0, 1.3fr) minmax(0, 1fr); gap: 12px; align-items: end; }
 .editor-filename label { display: block; margin-bottom: 8px; color: var(--fg-secondary); font-size: .8rem; font-weight: 700; }
+.editor-folder-label { display: grid !important; gap: 8px; margin-bottom: 0 !important; }
+.editor-folder-label select { min-height: 41px; padding: 8px 10px; border: 1px solid var(--border-control); border-radius: 8px; background: var(--surface-inset); color: var(--fg); font: inherit; }
+.editor-extras { display: grid; gap: 10px; margin-bottom: 14px; }
+.editor-frontmatter, .editor-related { border: 1px solid var(--border); border-radius: 9px; background: var(--surface); padding: 10px 14px; }
+.editor-frontmatter summary, .editor-related summary { cursor: pointer; font-size: 12px; font-weight: 700; color: var(--fg-secondary); }
+.editor-frontmatter-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 10px; margin-top: 12px; }
+.editor-frontmatter-grid label { display: grid; gap: 5px; font-size: 11px; color: var(--muted); font-weight: 700; }
+.editor-frontmatter-grid input, .editor-frontmatter-grid select { padding: 7px 9px; border: 1px solid var(--border-control); border-radius: 6px; background: var(--surface-inset); color: var(--fg); font-size: 12px; }
+.editor-related-body { display: grid; gap: 10px; margin-top: 10px; }
+.editor-related-body > .button { justify-self: start; }
+.editor-related-list { list-style: none; padding: 0; margin: 0; display: grid; gap: 8px; }
+.editor-related-list li { display: flex; justify-content: space-between; align-items: center; gap: 10px; padding: 8px 10px; border: 1px solid var(--border-soft); border-radius: 7px; background: var(--surface-inset); }
+.editor-related-list strong, .editor-related-list small { display: block; overflow-wrap: anywhere; }
+.editor-related-list small { color: var(--muted); font-size: 11px; }
 .editor-filename-field { display: flex; align-items: center; border: 1px solid var(--border-control); border-radius: 8px; background: var(--surface-inset); }
 .editor-filename-field:focus-within { border-color: var(--accent); outline: 2px solid var(--accent-bright); outline-offset: 2px; }
 .editor-filename-field input { min-width: 0; flex: 1; padding: 11px 12px; border: 0; outline: 0; background: transparent; color: var(--fg); font: inherit; }
@@ -58,13 +73,17 @@
 .editor-workspace-split .editor-preview-body { flex: 1; min-height: 0; overflow-y: auto; }
 .editor-preview-empty { margin: 0; color: var(--muted); font-size: .85rem; }
 .editor-preview-error { color: var(--error); font-size: .85rem; line-height: 1.6; }
-.editor-rendered { color: var(--fg-secondary); font-size: .9rem; line-height: 1.8; }
+.editor-rendered { color: var(--fg-secondary); font-size: 14px; line-height: 1.8; }
 .editor-rendered > :first-child { margin-top: 0; }
-.editor-rendered h1, .editor-rendered h2, .editor-rendered h3, .editor-rendered h4 { color: var(--fg); line-height: 1.3; }
-.editor-rendered a { color: var(--accent-bright); }
-.editor-rendered pre, .editor-rendered code { font-family: 'JetBrains Mono Variable', monospace; font-size: .85em; }
+.editor-rendered h1, .editor-rendered h2, .editor-rendered h3, .editor-rendered h4 { color: var(--fg); line-height: 1.3; margin: 1.4em 0 .5em; }
+.editor-rendered h1 { font-size: 24px; }
+.editor-rendered h2 { font-size: 19px; }
+.editor-rendered h3 { font-size: 16px; }
+.editor-rendered a { color: var(--accent-bright); text-decoration: underline; text-underline-offset: 3px; }
+.editor-rendered pre, .editor-rendered code { font-family: 'JetBrains Mono Variable', monospace; font-size: .9em; }
 .editor-rendered pre { padding: 14px; border: 1px solid var(--border); border-radius: 8px; overflow-x: auto; background: var(--surface-inset); }
-.editor-rendered blockquote { margin-left: 0; padding-left: 16px; border-left: 2px solid var(--accent); color: var(--muted); }
+.editor-rendered blockquote { margin-left: 0; padding-left: 16px; border-left: 3px solid var(--accent-border); color: var(--muted); }
+.editor-rendered .task-list-checkbox { width: 14px; height: 14px; accent-color: var(--accent); vertical-align: middle; margin-right: 6px; }
 .editor-rendered img { max-width: 100%; height: auto; }
 .editor-rendered table { display: block; max-width: 100%; overflow-x: auto; border-collapse: collapse; }
 .editor-rendered th, .editor-rendered td { padding: 7px 10px; border: 1px solid var(--border); }

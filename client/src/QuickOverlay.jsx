@@ -39,6 +39,10 @@ export default function QuickOverlay() {
   const searchInputRef = useRef(null);
   const filenameInputRef = useRef(null);
   const bodyRef = useRef(null);
+  const modeRef = useRef(mode);
+  const captureTargetRef = useRef(captureTarget);
+  modeRef.current = mode;
+  captureTargetRef.current = captureTarget;
 
   const loadCatalog = async () => {
     try {
@@ -58,13 +62,13 @@ export default function QuickOverlay() {
       loadCatalog();
       setStatus('');
       requestAnimationFrame(() => {
-        if (mode === 'jump') searchInputRef.current?.focus();
-        else if (captureTarget === 'new') filenameInputRef.current?.focus();
+        if (modeRef.current === 'jump') searchInputRef.current?.focus();
+        else if (captureTargetRef.current === 'new') filenameInputRef.current?.focus();
         else bodyRef.current?.focus();
       });
     }).then(fn => { unlisten = fn; });
     return () => { unlisten?.(); };
-  }, [mode, captureTarget]);
+  }, []);
 
   const ownerNotes = useMemo(() => {
     const notes = (catalog?.notes || []).filter(n => n.owner === 'owner');

@@ -17,6 +17,7 @@ export function SearchResults({ query, groups, filters, onFiltersChange }) {
   const [result, setResult] = useState(null), [error, setError] = useState(''), [offset, setOffset] = useState(0);
   const [semanticMessage, setSemanticMessage] = useState(''), [retry, setRetry] = useState(0);
   const workspace = filters.workspace || '', owner = filters.owner || '', review = filters.review || '', searchScope = filters.scope || 'all', mode = filters.mode || 'hybrid';
+  useEffect(() => { setOffset(0); }, [query, workspace, owner, review, searchScope, mode]);
   useEffect(() => {
     const controller = new AbortController();
     let active = true;

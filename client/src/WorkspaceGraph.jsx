@@ -1,7 +1,7 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { createGraphSimulation } from './graph-physics.mjs';
 import { ZoomIn, ZoomOut, Maximize, Search, ExternalLink, Columns2 } from 'lucide-react';
-import { isDesktop, openDetachedWindow, openInObsidian, openInVscode } from './desktop-bridge.mjs';
+import OpenInMenu from './OpenInMenu.jsx';
 import './Graph.css';
 
 const clamp = value => Math.max(0.12, Math.min(5, value));
@@ -40,15 +40,17 @@ function makeGraph(data, isolates, references) {
     .map((node, index) => ({
       ...node,
       degree: degree.get(node.path),
+      _search: `${node.title} ${node.path}`.toLowerCase(),
       x: Math.cos(index * 2.399) * Math.sqrt(index) * 24,
       y: Math.sin(index * 2.399) * Math.sqrt(index) * 24,
     }));
   const paths = new Set(nodes.map(node => node.path));
   const edges = visibleEdges.filter(edge => paths.has(edge.source) && paths.has(edge.target)).map(edge => ({ ...edge }));
-  return { nodes, edges };
+  const sortedByDegree = [...nodes].sort((a, b) => b.degree - a.degree);
+  return { nodes, edges, sortedByDegree };
 }
 
-export default function WorkspaceGraph({ project, label, onOpenNote, onOpenSplit, vaultName }) {
+export default function WorkspaceGraph({ project, label, groups = [], onOpenNote, onOpenSplit, vaultName }) {
   const [data, setData] = useState(null);
   const [error, setError] = useState('');
   const [selected, setSelected] = useState(null);
@@ -56,6 +58,7 @@ export default function WorkspaceGraph({ project, label, onOpenNote, onOpenSplit
   const [query, setQuery] = useState('');
   const [isolates, setIsolates] = useState(true);
   const [references, setReferences] = useState(true);
+  const [highlightUnreviewed, setHighlightUnreviewed] = useState(false);
   const [spotlightWorkspace, setSpotlightWorkspace] = useState('');
   const [size, setSize] = useState({ width: 800, height: 550 });
   const [settled, setSettled] = useState(null);
@@ -66,10 +69,13 @@ export default function WorkspaceGraph({ project, label, onOpenNote, onOpenSplit
   const gestures = useRef(new Map());
   const moved = useRef(false);
   const viewRef = useRef({ x: 400, y: 275, scale: 1 });
+  const prevSizeRef = useRef({ width: 800, height: 550 });
+  const fittedGraphRef = useRef(null);
   const activeRef = useRef(null);
   const selectedRef = useRef(null);
   const queryRef = useRef('');
   const spotlightRef = useRef('');
+  const highlightUnreviewedRef = useRef(false);
   const rafRef = useRef(0);
   const tweenRafRef = useRef(0);
   const animatingRef = useRef(false);
@@ -77,6 +83,16 @@ export default function WorkspaceGraph({ project, label, onOpenNote, onOpenSplit
   selectedRef.current = selected;
   queryRef.current = query;
   spotlightRef.current = spotlightWorkspace;
+  highlightUnreviewedRef.current = highlightUnreviewed;
+
+  const groupNames = useMemo(() => {
+    const map = new Map([['global', 'General'], ['__unmapped', 'Unmapped']]);
+    for (const g of groups) {
+      if (g?.id) map.set(g.id, g.name || g.id);
+    }
+    return map;
+  }, [groups]);
+  const friendlyWorkspace = useCallback(id => groupNames.get(id) || id || 'General', [groupNames]);
 
   useEffect(() => {
     const controller = new AbortController();
@@ -146,9 +162,9 @@ export default function WorkspaceGraph({ project, label, onOpenNote, onOpenSplit
       counts.set(ws, (counts.get(ws) || 0) + 1);
     }
     return [...counts.entries()]
-      .sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))
-      .map(([id, count]) => ({ id, count, color: workspaceColor(id) }));
-  }, [graph, project]);
+      .sort((a, b) => b[1] - a[1] || friendlyWorkspace(a[0]).localeCompare(friendlyWorkspace(b[0])))
+      .map(([id, count]) => ({ id, name: friendlyWorkspace(id), count, color: workspaceColor(id) }));
+  }, [graph, project, friendlyWorkspace]);
 
   const neighbors = useMemo(() => {
     const paths = new Set(active ? [active] : []);
@@ -184,13 +200,18 @@ export default function WorkspaceGraph({ project, label, onOpenNote, onOpenSplit
     const currentSelected = selectedRef.current;
     const term = queryRef.current.trim().toLowerCase();
     const spotlight = spotlightRef.current;
+    const onlyUnreviewed = highlightUnreviewedRef.current;
     const isAllVault = project === '__all';
     const baseRadius = Math.max(4.5, Math.min(8, 6 * Math.sqrt(view.scale)));
+
+    const isUnreviewedAgent = node =>
+      node.owner === 'agent' && node.reviewStatus === 'unreviewed' && !['archived', 'superseded'].includes((node.status || '').toLowerCase());
 
     const isHighlightedNode = node => {
       if (currentActive && !neighbors.has(node.path)) return false;
       if (spotlight && (node.workspaceId || node.project || 'global') !== spotlight) return false;
-      if (term && !`${node.title} ${node.path}`.toLowerCase().includes(term)) return false;
+      if (onlyUnreviewed && !isUnreviewedAgent(node)) return false;
+      if (term && !node._search.includes(term)) return false;
       return true;
     };
 
@@ -200,7 +221,8 @@ export default function WorkspaceGraph({ project, label, onOpenNote, onOpenSplit
       const touchesActive = currentActive && (edge.source.path === currentActive || edge.target.path === currentActive);
       const dimByActive = currentActive && !touchesActive;
       const dimBySpotlight = spotlight && (edge.source.workspaceId || edge.source.project) !== spotlight && (edge.target.workspaceId || edge.target.project) !== spotlight;
-      const dim = dimByActive || dimBySpotlight;
+      const dimByUnreviewed = onlyUnreviewed && !isUnreviewedAgent(edge.source) && !isUnreviewedAgent(edge.target);
+      const dim = dimByActive || dimBySpotlight || dimByUnreviewed;
       const sx = edge.source.x * view.scale + view.x;
       const sy = edge.source.y * view.scale + view.y;
       const tx = edge.target.x * view.scale + view.x;
@@ -239,7 +261,11 @@ export default function WorkspaceGraph({ project, label, onOpenNote, onOpenSplit
       const highlighted = isHighlightedNode(node);
       const isSelected = currentSelected === node.path;
       const isActive = currentActive === node.path;
-      const color = isAllVault ? workspaceColor(node.workspaceId || node.project) : '#d39476';
+      const color = isUnreviewedAgent(node) && onlyUnreviewed
+        ? '#efb99d'
+        : isAllVault
+          ? workspaceColor(node.workspaceId || node.project)
+          : '#d39476';
       const r = isSelected ? baseRadius + 2.5 : baseRadius + Math.min(3, Math.sqrt(node.degree || 0) * 0.7);
 
       ctx.save();
@@ -272,15 +298,22 @@ export default function WorkspaceGraph({ project, label, onOpenNote, onOpenSplit
       ctx.restore();
     }
 
-    // Collision-culled labels
+    // Collision-culled labels (neighbor priority when a node is active, otherwise pre-sorted degree order)
     ctx.font = '500 12px "Manrope Variable", sans-serif';
     ctx.textBaseline = 'middle';
     const occupied = [];
-    const sorted = [...graph.nodes].sort((a, b) => (neighbors.has(b.path) - neighbors.has(a.path)) || b.degree - a.degree);
-    for (const node of sorted) {
-      if (!neighbors.has(node.path) && view.scale < 0.6 && node.degree < 3 && !term && !spotlight) continue;
-      if (term && !`${node.title} ${node.path}`.toLowerCase().includes(term) && node.path !== currentActive) continue;
+    const ordered = currentActive && neighbors.size
+      ? [
+          ...graph.sortedByDegree.filter(n => neighbors.has(n.path)),
+          ...graph.sortedByDegree.filter(n => !neighbors.has(n.path)),
+        ]
+      : graph.sortedByDegree;
+
+    for (const node of ordered) {
+      if (!neighbors.has(node.path) && view.scale < 0.6 && node.degree < 3 && !term && !spotlight && !onlyUnreviewed) continue;
+      if (term && !node._search.includes(term) && node.path !== currentActive) continue;
       if (spotlight && (node.workspaceId || node.project || 'global') !== spotlight && !neighbors.has(node.path)) continue;
+      if (onlyUnreviewed && !isUnreviewedAgent(node) && node.path !== currentActive) continue;
       const nx = node.x * view.scale + view.x;
       const ny = node.y * view.scale + view.y;
       if (nx < -120 || nx > width + 20 || ny < -20 || ny > height + 20) continue;
@@ -333,20 +366,28 @@ export default function WorkspaceGraph({ project, label, onOpenNote, onOpenSplit
 
   useEffect(() => {
     scheduleDraw();
-  }, [scheduleDraw, graph, active, selected, query, spotlightWorkspace, size.width, size.height]);
+  }, [scheduleDraw, graph, active, selected, query, spotlightWorkspace, highlightUnreviewed, size.width, size.height]);
 
   useEffect(() => {
     const element = canvasRef.current;
     if (!element) return undefined;
     const observer = new ResizeObserver(entries => {
       const rect = entries[0].contentRect;
-      if (rect.width && rect.height) setSize({ width: rect.width, height: rect.height });
+      if (rect.width && rect.height) {
+        const dx = (rect.width - prevSizeRef.current.width) / 2;
+        const dy = (rect.height - prevSizeRef.current.height) / 2;
+        if (dx || dy) {
+          viewRef.current = { ...viewRef.current, x: viewRef.current.x + dx, y: viewRef.current.y + dy };
+        }
+        prevSizeRef.current = { width: rect.width, height: rect.height };
+        setSize({ width: rect.width, height: rect.height });
+      }
     });
     observer.observe(element);
     return () => observer.disconnect();
   }, [graph]);
 
-  const computeFitTarget = useCallback(() => {
+  const computeFitTarget = useCallback((dims = size) => {
     if (!graph?.nodes.length) return null;
     const xs = graph.nodes.map(node => node.x);
     const ys = graph.nodes.map(node => node.y);
@@ -354,21 +395,23 @@ export default function WorkspaceGraph({ project, label, onOpenNote, onOpenSplit
     const maxX = Math.max(...xs) + 35;
     const minY = Math.min(...ys) - 35;
     const maxY = Math.max(...ys) + 35;
-    const scale = clamp(Math.min(1.8, (size.width - 40) / (maxX - minX), (size.height - 40) / (maxY - minY)));
+    const scale = clamp(Math.min(1.8, (dims.width - 40) / (maxX - minX), (dims.height - 40) / (maxY - minY)));
     return {
-      x: size.width / 2 - ((minX + maxX) / 2) * scale,
-      y: size.height / 2 - ((minY + maxY) / 2) * scale,
+      x: dims.width / 2 - ((minX + maxX) / 2) * scale,
+      y: dims.height / 2 - ((minY + maxY) / 2) * scale,
       scale,
     };
-  }, [graph, size.height, size.width]);
+  }, [graph, size]);
 
   useEffect(() => {
+    if (!graph || fittedGraphRef.current === graph) return;
+    fittedGraphRef.current = graph;
     const target = computeFitTarget();
     if (target) {
       viewRef.current = target;
       scheduleDraw();
     }
-  }, [computeFitTarget, scheduleDraw]);
+  }, [graph, computeFitTarget, scheduleDraw]);
 
   const fit = useCallback(() => {
     const target = computeFitTarget();
@@ -503,8 +546,9 @@ export default function WorkspaceGraph({ project, label, onOpenNote, onOpenSplit
     }
     gestures.current.delete(event.pointerId);
     if (wasClick && item.node) {
-      if (event.ctrlKey || event.metaKey || event.shiftKey) focusNode(item.node);
-      else onOpenNote(item.node.path);
+      if (event.altKey && onOpenSplit) onOpenSplit({ kind: 'note', path: item.node.path });
+      else if (event.ctrlKey || event.metaKey) onOpenNote(item.node.path);
+      else focusNode(item.node);
     } else if (wasClick && !item.node) {
       setSelected(null);
     }
@@ -534,10 +578,11 @@ export default function WorkspaceGraph({ project, label, onOpenNote, onOpenSplit
   const current = graph?.nodes.find(node => node.path === selected);
   const incoming = graph?.edges.filter(edge => edge.target.path === selected) || [];
   const outgoing = graph?.edges.filter(edge => edge.source.path === selected) || [];
-  const matches = useMemo(
-    () => graph?.nodes.filter(node => `${node.title} ${node.path}`.toLowerCase().includes(query.toLowerCase())) || [],
-    [graph, query],
-  );
+  const matches = useMemo(() => {
+    if (!graph) return [];
+    const term = query.trim().toLowerCase();
+    return term ? graph.nodes.filter(node => node._search.includes(term)) : graph.nodes;
+  }, [graph, query]);
 
   return (
     <section className="workspace-graph" aria-label={`${label} knowledge graph`}>
@@ -549,7 +594,17 @@ export default function WorkspaceGraph({ project, label, onOpenNote, onOpenSplit
             <label className="graph-search">
               <Search size={18} />
               <span className="graph-sr">Search graph notes</span>
-              <input value={query} onChange={event => setQuery(event.target.value)} placeholder="Find a note" />
+              <input
+                value={query}
+                onChange={event => setQuery(event.target.value)}
+                onKeyDown={event => {
+                  if (event.key === 'Enter' && matches.length) {
+                    event.preventDefault();
+                    focusNode(matches[0]);
+                  }
+                }}
+                placeholder="Find a note (Enter to focus)"
+              />
             </label>
             <label className="graph-filter">
               <input type="checkbox" checked={isolates} onChange={event => setIsolates(event.target.checked)} /> Isolates
@@ -559,6 +614,9 @@ export default function WorkspaceGraph({ project, label, onOpenNote, onOpenSplit
                 <input type="checkbox" checked={references} onChange={event => setReferences(event.target.checked)} /> References
               </label>
             )}
+            <label className="graph-filter">
+              <input type="checkbox" checked={highlightUnreviewed} onChange={event => setHighlightUnreviewed(event.target.checked)} /> Unreviewed only
+            </label>
             <div className="graph-controls">
               <button type="button" onClick={() => zoomAt(1.3, size.width / 2, size.height / 2)} aria-label="Zoom in"><ZoomIn size={18} /></button>
               <button type="button" onClick={() => zoomAt(1 / 1.3, size.width / 2, size.height / 2)} aria-label="Zoom out"><ZoomOut size={18} /></button>
@@ -566,7 +624,7 @@ export default function WorkspaceGraph({ project, label, onOpenNote, onOpenSplit
             </div>
           </div>
           <p className="graph-summary">
-            {graph.nodes.filter(node => !node.external).length} notes · {graph.nodes.filter(node => node.external).length} external references · {graph.edges.length} links · {data.unresolvedCount || 0} unresolved references. Click a note to open; right-click to inspect.
+            {graph.nodes.filter(node => !node.external).length} notes · {graph.nodes.filter(node => node.external).length} external references · {graph.edges.length} links · {data.unresolvedCount || 0} unresolved references. Click to inspect, double-click to open{onOpenSplit ? ', Alt+click for split' : ''}.
           </p>
           {workspaceGroups.length > 0 && (
             <div className="graph-legend" role="group" aria-label="Filter graph by workspace">
@@ -579,7 +637,7 @@ export default function WorkspaceGraph({ project, label, onOpenNote, onOpenSplit
                   onClick={() => setSpotlightWorkspace(prev => (prev === ws.id ? '' : ws.id))}
                 >
                   <span className="graph-legend-dot" style={{ backgroundColor: ws.color }} />
-                  <span>{ws.id === 'global' ? 'General' : ws.id === '__unmapped' ? 'Unmapped' : ws.id}</span>
+                  <span>{ws.name}</span>
                   <small>{ws.count}</small>
                 </button>
               ))}
@@ -604,7 +662,15 @@ export default function WorkspaceGraph({ project, label, onOpenNote, onOpenSplit
                   } else if (['+', '=', '-'].includes(event.key)) {
                     event.preventDefault();
                     zoomAt(event.key === '-' ? 1 / 1.3 : 1.3, size.width / 2, size.height / 2);
+                  } else if (event.key === 'Enter' && current) {
+                    event.preventDefault();
+                    onOpenNote(current.path);
                   }
+                }}
+                onDoubleClick={event => {
+                  const p = point(event);
+                  const hit = nodeAt(p.x, p.y);
+                  if (hit) onOpenNote(hit.path);
                 }}
                 onContextMenu={event => {
                   event.preventDefault();
@@ -622,33 +688,26 @@ export default function WorkspaceGraph({ project, label, onOpenNote, onOpenSplit
               <aside className="graph-inspector" aria-live="polite">
                 {current ? (
                   <>
-                    <span className="graph-kicker">{current.external ? 'External reference' : current.workspaceId || 'Workspace note'}</span>
+                    <span className="graph-kicker">{current.external ? 'External reference' : friendlyWorkspace(current.workspaceId || current.project)}</span>
                     <h3>{current.title}</h3>
                     <p className="graph-path">{current.path}</p>
                     <p>{current.excerpt}</p>
-                    <button type="button" onClick={() => onOpenNote(current.path)}><ExternalLink size={16} /> Open note</button>
-                    {onOpenSplit && (
-                      <button type="button" style={{ marginTop: 6 }} onClick={() => onOpenSplit({ kind: 'note', path: current.path })}>
-                        <Columns2 size={16} /> Open in split
-                      </button>
-                    )}
-                    {isDesktop() && (
-                      <div style={{ display: 'grid', gap: 6, marginTop: 8 }}>
-                        <button type="button" onClick={() => openDetachedWindow(noteUrl(current.path), current.title)}>Pop out window</button>
-                        <button type="button" onClick={() => openInVscode(current.path)}>Open in VS Code</button>
-                        <button type="button" onClick={() => openInObsidian(current.path, vaultName)}>Open in Obsidian</button>
-                      </div>
-                    )}
-                    {!isDesktop() && vaultName && (
-                      <a className="graph-obsidian" href={`obsidian://open?vault=${encodeURIComponent(vaultName)}&file=${encodeURIComponent(current.path)}`}>Open in Obsidian</a>
-                    )}
+                    <div className="graph-inspector-actions">
+                      <button type="button" className="button button-primary" onClick={() => onOpenNote(current.path)}><ExternalLink size={15} /> Open note</button>
+                      {onOpenSplit && (
+                        <button type="button" className="button" onClick={() => onOpenSplit({ kind: 'note', path: current.path })}>
+                          <Columns2 size={15} /> Split
+                        </button>
+                      )}
+                      <OpenInMenu path={current.path} title={current.title} vaultName={vaultName} className="button" />
+                    </div>
                     <h4>Incoming ({incoming.length})</h4>
                     {incoming.map(edge => <button className="graph-link" key={edge.source.path} onClick={() => focusNode(edge.source)}>{edge.source.title}</button>)}
                     <h4>Outgoing ({outgoing.length})</h4>
                     {outgoing.map(edge => <button className="graph-link" key={edge.target.path} onClick={() => focusNode(edge.target)}>{edge.target.title}</button>)}
                   </>
                 ) : (
-                  <p>Right-click a note or choose one from the list to inspect its connections.</p>
+                  <p>Click a node or choose one from the list to inspect its connections.</p>
                 )}
               </aside>
             </div>

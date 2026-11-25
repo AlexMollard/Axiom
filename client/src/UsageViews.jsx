@@ -43,7 +43,7 @@ function useUsage() {
       },
       onUsage: () => { if (active) { setNow(Date.now()); load(); } },
     });
-    const wake = () => { if (document.visibilityState === 'visible') { setNow(Date.now()); load(); } };
+    const wake = () => { if (!liveRef.current && document.visibilityState === 'visible') { setNow(Date.now()); load(); } };
     const timer = setInterval(() => { if (!liveRef.current) wake(); }, 5000);
     const clock = setInterval(() => { if (document.visibilityState === 'visible') setNow(Date.now()); }, 30000);
     window.addEventListener('focus', wake);
@@ -62,8 +62,34 @@ function UsageDetails({ usage, now }) {
 }
 
 export function UsageSummary({ path }) {
-  const { data, error, reload, now } = useUsage();
-  const note = data?.notes.find(item => item.path === path);
+  const [state, setState] = useState({ data: null, error: '' });
+  const [refresh, setRefresh] = useState(0);
+  const [now, setNow] = useState(Date.now);
+  const reload = useCallback(() => setRefresh(n => n + 1), []);
+
+  useEffect(() => {
+    let active = true;
+    const controller = new AbortController();
+    const load = async () => {
+      try {
+        const response = await fetch('/api/note-usage?path=' + encodeURIComponent(path), { signal: controller.signal });
+        const result = await response.json();
+        if (!response.ok) throw new Error(result.error || `Request failed (${response.status})`);
+        if (active) setState({ data: result, error: '' });
+      } catch (e) {
+        if (active && e.name !== 'AbortError') setState({ data: null, error: e.message || 'Could not load note usage.' });
+      }
+    };
+    load();
+    const unsubscribe = subscribeVaultEvents({
+      onUsage: () => { if (active) { setNow(Date.now()); load(); } },
+    });
+    const clock = setInterval(() => { if (document.visibilityState === 'visible') setNow(Date.now()); }, 30000);
+    return () => { active = false; controller.abort(); unsubscribe(); clearInterval(clock); };
+  }, [path, refresh]);
+
+  const { data, error } = state;
+  const note = data?.note;
   return <section className="panel usage-summary"><div className="usage-summary-heading"><h2>Usage</h2><button className="button" type="button" onClick={reload} aria-label="Refresh note usage"><RefreshCw size={15} aria-hidden="true" /> Refresh</button></div>{error ? <p className="usage-error" role="alert">Usage unavailable: {error}</p> : !data ? <p className="muted">Loading usage…</p> : !data.tracking.healthy ? <p className="usage-error">Tracking unavailable{data.tracking.reason ? `: ${data.tracking.reason}` : '.'} Missing deliveries are not evidence of disuse.</p> : !note ? <p className="muted">This note is not in the usage inventory. Refresh to try again.</p> : <><span className="badge">{statusLabels[note.usage.status]}</span><UsageDetails usage={note.usage} now={now} /><p className="usage-summary-limit">Recorded deliveries only; not evidence of comprehension or ongoing use. Stale candidates require manual review.</p><a href="/?view=usage">View note usage</a></>}</section>;
 }
 

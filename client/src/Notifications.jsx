@@ -97,13 +97,12 @@ export default function Notifications({ catalog, groups, pendingCount, onCatalog
         sseConnectedRef.current = status === 'connected';
         if (!stopped) setSseConnected(status === 'connected');
       },
-      onCatalog: () => { if (!stopped) check({ force: true }); },
     });
 
     const interval = setInterval(() => {
       if (!sseConnectedRef.current) check();
     }, 15000);
-    const onWake = () => check();
+    const onWake = () => { if (!sseConnectedRef.current) check(); };
     document.addEventListener('visibilitychange', onWake);
     window.addEventListener('focus', onWake);
     return () => {

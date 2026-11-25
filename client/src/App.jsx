@@ -1,21 +1,19 @@
-import React, { lazy, Suspense, useCallback, useEffect, useRef, useState } from 'react';
+import React, { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { ArrowRight, ArrowUpRight, Bot, Check, ChevronDown, ChevronRight, FileText, FolderKanban, LayoutDashboard, List, Network, Plus, RefreshCw, Search, ShieldCheck, UserRound, Inbox, Undo2, Trash2, Settings, Activity, Plug, DatabaseBackup, Command, ScanSearch, Columns2, X } from 'lucide-react';
 import WorkspaceIcon, { registerWorkspaceIconNodes } from './WorkspaceIcon.jsx';
-import { DeleteNote, WorkspaceSettings, Trash } from './Management.jsx';
 import { SearchResults, CommandPalette } from './SearchExperience.jsx';
 import { ReviewInbox, ReviewDiff } from './ReviewInbox.jsx';
-import { WorkspaceOverview, MemoryHealth, NoteKnowledge } from './KnowledgeViews.jsx';
-import HarnessPage from './HarnessPage.jsx';
-import RecoveryPage from './RecoveryPage.jsx';
+import { NoteKnowledge } from './KnowledgeViews.jsx';
 import Notifications from './Notifications.jsx';
-import UsagePage, { UsageSummary } from './UsageViews.jsx';
-import Cleanup from './Cleanup.jsx';
+import { UsageSummary } from './UsageViews.jsx';
 import TitleBar from './TitleBar.jsx';
 import TabBar from './TabBar.jsx';
 import StatusBar from './StatusBar.jsx';
-import DesktopSettings from './DesktopSettings.jsx';
 import InNoteFind from './InNoteFind.jsx';
+import OpenInMenu from './OpenInMenu.jsx';
+import { ToastViewport, showToast } from './Toast.jsx';
 import { useConfirm } from './ConfirmDialog.jsx';
+import { resolveNote } from './markdown-preview.mjs';
 import {
   apiMutate,
   getDesktopInfo,
@@ -24,8 +22,6 @@ import {
   isDesktop,
   listenDesktop,
   openDetachedWindow,
-  openInObsidian,
-  openInVscode,
   quitDesktop,
   readBucketState,
   revealInExplorer,
@@ -42,6 +38,16 @@ const MarkdownEditor = lazy(() => import('./MarkdownEditor.jsx'));
 const NoteHistory = lazy(() => import('./NoteHistory.jsx'));
 const WorkspaceGraph = lazy(() => import('./WorkspaceGraph.jsx'));
 const QuickOverlay = lazy(() => import('./QuickOverlay.jsx'));
+const Cleanup = lazy(() => import('./Cleanup.jsx'));
+const HarnessPage = lazy(() => import('./HarnessPage.jsx'));
+const RecoveryPage = lazy(() => import('./RecoveryPage.jsx'));
+const DesktopSettings = lazy(() => import('./DesktopSettings.jsx'));
+const UsagePage = lazy(() => import('./UsageViews.jsx'));
+const WorkspaceOverview = lazy(() => import('./KnowledgeViews.jsx').then(m => ({ default: m.WorkspaceOverview })));
+const MemoryHealth = lazy(() => import('./KnowledgeViews.jsx').then(m => ({ default: m.MemoryHealth })));
+const DeleteNote = lazy(() => import('./Management.jsx').then(m => ({ default: m.DeleteNote })));
+const WorkspaceSettings = lazy(() => import('./Management.jsx').then(m => ({ default: m.WorkspaceSettings })));
+const Trash = lazy(() => import('./Management.jsx').then(m => ({ default: m.Trash })));
 
 const labels = { all: 'All notes', owner: 'Your notes', agent: 'Agent memory', review: 'Review queue', proposals: 'Review queue', projects: 'Workspaces', trash: 'Trash', health: 'Memory health', cleanup: 'Clean up', harnesses: 'Harnesses', recovery: 'Backups & recovery', usage: 'Note usage' };
 const projectLabel = (id, groups = []) => groups.find(g => g.id === id)?.name || (id === '__all' ? 'All vaults' : id === '__unmapped' ? 'Unmapped notes' : id === 'global' ? 'General' : (id || 'General').replaceAll('-', ' ').replace(/^./, c => c.toUpperCase()));
@@ -79,24 +85,16 @@ async function api(url) {
   return data;
 }
 
-function time(value) {
-  const date = new Date(value), seconds = (Date.now() - date.getTime()) / 1000;
-  if (!Number.isFinite(seconds)) return 'Unknown time';
+const rtf = new Intl.RelativeTimeFormat(undefined, { numeric: 'always' });
+function time(iso) {
+  const date = new Date(iso);
+  if (Number.isNaN(date.getTime())) return iso || '';
+  const seconds = Math.round((date.getTime() - Date.now()) / 1000);
   if (Math.abs(seconds) < 60) return 'Just now';
-  if (seconds >= 60 && seconds < 3600) return `${Math.floor(seconds / 60)}m ago`;
-  if (seconds >= 3600 && seconds < 86400) return `${Math.floor(seconds / 3600)}h ago`;
-  if (seconds >= 86400 && seconds < 604800) return `${Math.floor(seconds / 86400)}d ago`;
+  if (Math.abs(seconds) < 3600) return rtf.format(Math.trunc(seconds / 60), 'minute');
+  if (Math.abs(seconds) < 86400) return rtf.format(Math.trunc(seconds / 3600), 'hour');
+  if (Math.abs(seconds) < 604800) return rtf.format(Math.trunc(seconds / 86400), 'day');
   return date.toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' });
-}
-
-function resolvesTo(link, candidate, note, notes) {
-  let target;
-  try { target = decodeURIComponent(link.split('#')[0]).replace(/\.md$/i, '').replaceAll('\\', '/'); } catch { return false; }
-  const relative = new URL(target, 'https://vault.invalid/' + candidate.path).pathname.slice(1);
-  const exact = notes.filter(n => [target, relative].some(v => n.path.replace(/\.md$/i, '').toLowerCase() === v.toLowerCase()));
-  if (exact.length === 1) return exact[0].path === note.path;
-  const byName = notes.filter(n => n.path.split('/').at(-1).replace(/\.md$/i, '').toLowerCase() === target.toLowerCase() || n.title.toLowerCase() === target.toLowerCase());
-  return byName.length === 1 && byName[0].path === note.path;
 }
 
 function pinsFrom(html) {
@@ -119,49 +117,38 @@ function Panel({ title, action, children, className = '' }) {
 
 function Empty({ children }) { return <p className="empty">{children}</p>; }
 
-function Reader({ data, notes, vaultName, groups, onReview, reviewBusy, reviewError, onNext, onPrev, onDelete, reviewScope, onOpenNote, onOpenSplit, onRestored }) {
+function Reader({
+  data,
+  notes,
+  vaultName,
+  groups,
+  onReview,
+  reviewBusy,
+  reviewError,
+  queuePosition,
+  queueTotal,
+  onNext,
+  onPrev,
+  onDelete,
+  reviewScope,
+  onOpenNote,
+  onOpenSplit,
+  onRestored,
+}) {
   const { note, html } = data;
-  const parsed = React.useMemo(() => {
+  const parsed = useMemo(() => {
     const doc = new DOMParser().parseFromString(html, 'text/html');
     const first = doc.body.firstElementChild;
     const titleId = first?.tagName === 'H1' && first.textContent.trim() === note.title.trim() ? first.id : '';
     if (titleId) first.remove();
     return { html: doc.body.innerHTML, titleId, headings: [...doc.querySelectorAll('h1[id],h2[id],h3[id],h4[id]')].map(h => ({ id: h.id, title: h.textContent, level: h.tagName })) };
   }, [html, note.title]);
-  const backlinks = notes.filter(n => n.path !== note.path && (n.links || []).some(link => resolvesTo(link, n, note, notes)));
+
+  const backlinks = useMemo(() => {
+    return notes.filter(n => n.path !== note.path && (n.links || []).some(link => resolveNote(link, n.path, notes)?.path === note.path));
+  }, [notes, note.path]);
+
   const scope = note.project !== 'global' && !groups.some(g => g.id === note.project) ? '__unmapped' : note.project;
-  const [copiedMsg, setCopiedMsg] = useState('');
-  const [openMenuOpen, setOpenMenuOpen] = useState(false);
-  const openMenuRef = useRef(null);
-  const copyTimer = useRef(null);
-
-  useEffect(() => {
-    if (!openMenuOpen) return;
-    const onDown = event => {
-      if (openMenuRef.current && !openMenuRef.current.contains(event.target)) setOpenMenuOpen(false);
-    };
-    const onKey = event => {
-      if (event.key === 'Escape') setOpenMenuOpen(false);
-    };
-    window.addEventListener('mousedown', onDown);
-    window.addEventListener('keydown', onKey);
-    return () => {
-      window.removeEventListener('mousedown', onDown);
-      window.removeEventListener('keydown', onKey);
-    };
-  }, [openMenuOpen]);
-
-  useEffect(() => () => clearTimeout(copyTimer.current), []);
-
-  const copyWikilink = async () => {
-    const link = `[[${note.path.replace(/\.md$/i, '')}]]`;
-    try {
-      await navigator.clipboard.writeText(link);
-      setCopiedMsg('Copied');
-      clearTimeout(copyTimer.current);
-      copyTimer.current = setTimeout(() => setCopiedMsg(''), 1500);
-    } catch {}
-  };
 
   return (
     <>
@@ -170,25 +157,7 @@ function Reader({ data, notes, vaultName, groups, onReview, reviewBusy, reviewEr
         <div><p className="eyebrow">Knowledge / Note</p><h1 id={parsed.titleId || undefined}>{note.title}</h1><div className="reader-flags"><span className="badge">{reviewLabel(note)}</span>{['archived', 'superseded'].includes((note.status || '').toLowerCase()) && <span className="badge">{note.status}</span>}<span>Updated {time(note.updated)}</span></div></div>
         <div className="heading-actions">
           {isDesktop() ? (
-            <div className="action-menu" ref={openMenuRef}>
-              <button
-                type="button"
-                className="button button-soft"
-                aria-haspopup="menu"
-                aria-expanded={openMenuOpen}
-                onClick={() => setOpenMenuOpen(v => !v)}
-              >
-                {copiedMsg || 'Open in'} <ChevronDown size={14} aria-hidden="true" />
-              </button>
-              {openMenuOpen && (
-                <div className="action-menu-popover" role="menu">
-                  <button type="button" role="menuitem" onClick={() => { openInObsidian(note.path, vaultName); setOpenMenuOpen(false); }}>Open in Obsidian</button>
-                  <button type="button" role="menuitem" onClick={() => { openInVscode(note.path); setOpenMenuOpen(false); }}>Open in VS Code</button>
-                  <button type="button" role="menuitem" onClick={() => { revealInExplorer('note', note.path); setOpenMenuOpen(false); }}>Reveal in Explorer</button>
-                  <button type="button" role="menuitem" onClick={() => { copyWikilink(); setOpenMenuOpen(false); }}>Copy wikilink</button>
-                </div>
-              )}
-            </div>
+            <OpenInMenu path={note.path} title={note.title} vaultName={vaultName} onOpenSplit={onOpenSplit} />
           ) : (
             <>
               <a className="button button-soft" href={obsidianUrl(vaultName, note.path)}>Open in Obsidian <ArrowUpRight size={18} strokeWidth={1.7} aria-hidden="true" /></a>
@@ -209,7 +178,10 @@ function Reader({ data, notes, vaultName, groups, onReview, reviewBusy, reviewEr
             <button className="button" disabled={reviewBusy} onClick={onNext}>Review next (J) <ArrowRight size={16} aria-hidden="true" /></button>
             <a className="button" href={routeUrl({ kind: 'review', ...reviewScope })}>Back to review queue</a>
           </div>
-          <p>Reviewed means checked, not promoted to owner policy. Shortcuts: J/K step, A approve &amp; next, D diff, E edit, Ctrl+F find.</p>
+          <p>
+            {queueTotal > 0 && queuePosition > 0 ? `Queue ${queuePosition} of ${queueTotal} · ` : queueTotal > 0 ? `${queueTotal} pending · ` : ''}
+            Reviewed means checked, not promoted to owner policy. Shortcuts: J/K step, A approve &amp; next, D diff, E edit, Ctrl+F find.
+          </p>
           {reviewError && <p className="review-error" role="alert">{reviewError}</p>}
         </section>
       )}
@@ -236,7 +208,7 @@ function Reader({ data, notes, vaultName, groups, onReview, reviewBusy, reviewEr
   );
 }
 
-function SplitPane({ splitRoute, vaultName, onClose, onChangeSplitRoute, onOpenMainNote }) {
+function SplitPane({ splitRoute, groups, vaultName, onClose, onChangeSplitRoute, onOpenMainNote }) {
   const [splitData, setSplitData] = useState(null);
   const [splitError, setSplitError] = useState('');
 
@@ -266,7 +238,7 @@ function SplitPane({ splitRoute, vaultName, onClose, onChangeSplitRoute, onOpenM
   return (
     <aside className="split-secondary-pane" aria-label="Split reference pane" onClick={handleSplitClick}>
       <div className="split-secondary-header">
-        <strong>{splitRoute.kind === 'project' ? 'Graph view' : splitRoute.kind === 'note' ? (splitData?.note?.title || splitRoute.path) : 'Split view'}</strong>
+        <strong>{splitRoute.kind === 'project' ? `${projectLabel(splitRoute.id, groups)} graph` : splitRoute.kind === 'note' ? (splitData?.note?.title || splitRoute.path) : 'Split view'}</strong>
         <div className="topbar-actions">
           {splitRoute.kind === 'note' && (
             <button type="button" className="button" onClick={() => onOpenMainNote(splitRoute.path)}>Focus main</button>
@@ -277,7 +249,7 @@ function SplitPane({ splitRoute, vaultName, onClose, onChangeSplitRoute, onOpenM
       {splitError && <p className="error-notice">{splitError}</p>}
       {splitRoute.kind === 'project' ? (
         <Suspense fallback={<p className="muted">Loading graph...</p>}>
-          <WorkspaceGraph project={splitRoute.id} label={splitRoute.id} vaultName={vaultName} onOpenNote={p => onChangeSplitRoute({ kind: 'note', path: p })} />
+          <WorkspaceGraph project={splitRoute.id} label={projectLabel(splitRoute.id, groups)} groups={groups} vaultName={vaultName} onOpenNote={p => onChangeSplitRoute({ kind: 'note', path: p })} />
         </Suspense>
       ) : splitRoute.kind !== 'note' ? (
         <p className="muted">Select a note or workspace graph to view in split mode.</p>
@@ -308,6 +280,9 @@ export default function App() {
 function MainApp({ detached = false }) {
   const [route, setRoute] = useState(routeFrom);
   const routeRef = useRef(route);
+  const lastBrowseRouteRef = useRef(route.kind === 'search' ? { kind: 'overview' } : route);
+  if (route.kind !== 'search') lastBrowseRouteRef.current = route;
+
   const dirty = useRef(false);
   const [catalog, setCatalogState] = useState(null);
   const setCatalog = useCallback(next => {
@@ -320,20 +295,21 @@ function MainApp({ detached = false }) {
   const [data, setData] = useState(null);
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(true);
-  const [refresh, setRefresh] = useState(0);
+  const [catalogRefresh, setCatalogRefresh] = useState(0);
+  const [noteRefresh, setNoteRefresh] = useState(0);
   const [query, setQuery] = useState(route.kind === 'search' ? route.query : '');
   const [visible, setVisible] = useState(48);
   const [activity, setActivity] = useState('all');
   const [reviewBusy, setReviewBusy] = useState(false);
   const [reviewError, setReviewError] = useState('');
   const [management, setManagement] = useState(null);
+  const [deleteTarget, setDeleteTarget] = useState(null);
   const [paletteOpen, setPaletteOpen] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [zoomPercent, setZoomPercent] = useState(100);
   const [sseStatus, setSseStatus] = useState('reconnecting');
   const [backendInfo, setBackendInfo] = useState(null);
   const [updateInfo, setUpdateInfo] = useState(null);
-  const [editorStats, setEditorStats] = useState(null);
   const [externalChangedPath, setExternalChangedPath] = useState('');
   const [splitRoute, setSplitRoute] = useState(null);
   const [splitPercent, setSplitPercent] = useState(44);
@@ -356,7 +332,8 @@ function MainApp({ detached = false }) {
 
   const input = useRef(null);
   const timer = useRef(null);
-  const request = useRef(0);
+  const catalogReq = useRef(0);
+  const noteReq = useRef(0);
   const { confirm, dialog } = useConfirm();
 
   const applyZoom = useCallback((nextZoom, persist = true) => {
@@ -396,9 +373,6 @@ function MainApp({ detached = false }) {
     clearTimeout(timer.current);
     dirty.current = false;
     setExternalChangedPath('');
-    if (['kind', 'path', 'edit', 'id'].some(key => next[key] !== routeRef.current[key]) || (next.kind === 'project' && next.mode !== routeRef.current.mode)) {
-      setLoading(true);
-    }
     routeRef.current = next;
     if (mode !== 'none') history[mode === 'replace' ? 'replaceState' : 'pushState']({}, '', routeUrl(next));
     setQuery(next.kind === 'search' ? next.query : '');
@@ -437,8 +411,8 @@ function MainApp({ detached = false }) {
   useEffect(() => {
     if (detached || !catalog?.vaultId) return;
     const key = `tabs:${catalog.vaultId}`;
-    writeBucketState('session', key, JSON.stringify({ tabs: tabs.map(t => ({ ...t, dirty: false })), activeId: activeTabId, splitPercent })).catch(() => {});
-  }, [tabs, activeTabId, splitPercent, catalog?.vaultId, detached]);
+    writeBucketState('session', key, JSON.stringify({ tabs: tabs.map(t => ({ ...t, dirty: false })), activeId: activeTabId, splitPercent, splitRoute })).catch(() => {});
+  }, [tabs, activeTabId, splitPercent, splitRoute, catalog?.vaultId, detached]);
 
   const hydratedTabs = useRef(false);
   useEffect(() => {
@@ -451,6 +425,9 @@ function MainApp({ detached = false }) {
         const parsed = JSON.parse(raw);
         if (Number.isFinite(parsed.splitPercent)) {
           setSplitPercent(Math.max(25, Math.min(70, parsed.splitPercent)));
+        }
+        if (parsed.splitRoute && typeof parsed.splitRoute === 'object') {
+          setSplitRoute(parsed.splitRoute);
         }
         if (Array.isArray(parsed.tabs) && parsed.tabs.length) {
           const initial = routeFrom();
@@ -481,8 +458,9 @@ function MainApp({ detached = false }) {
           setExternalChangedPath(current.path);
           return;
         }
+        setCatalogRefresh(n => n + 1);
         if (current.kind === 'note' && !current.edit && (!changed.length || changed.includes(current.path))) {
-          setRefresh(n => n + 1);
+          setNoteRefresh(n => n + 1);
         }
       },
     });
@@ -507,7 +485,13 @@ function MainApp({ detached = false }) {
       if (ok) quitDesktop();
     }).then(fn => unsubs.push(fn));
     listenDesktop('axiom://backup-created', () => {
-      setRefresh(n => n + 1);
+      setCatalogRefresh(n => n + 1);
+      showToast({ message: 'Vault backup snapshot created.' });
+    }).then(fn => unsubs.push(fn));
+    listenDesktop('axiom://toast-error', event => {
+      if (typeof event.payload === 'string' && event.payload) {
+        showToast({ message: event.payload, tone: 'error', durationMs: 7000 });
+      }
     }).then(fn => unsubs.push(fn));
     listenDesktop('axiom://update-available', event => {
       if (event.payload) setUpdateInfo(event.payload);
@@ -540,42 +524,68 @@ function MainApp({ detached = false }) {
     };
   }, [navigate]);
 
+  // Catalog lifecycle (boot, SSE, explicit refresh, or mutations)
   useEffect(() => {
-    const id = ++request.current;
+    const id = ++catalogReq.current;
+    if (!catalog) setLoading(true);
+    api('/api/catalog')
+      .then(cat => {
+        if (id !== catalogReq.current) return;
+        setCatalog(cat);
+        setError('');
+        setTabs(prev => prev.map(t => (t.id === activeTabRef.current ? { ...t, title: routeTitle(routeRef.current, cat.notes, cat.projects) } : t)));
+        if (routeRef.current.kind !== 'note' && routeRef.current.kind !== 'overview') setLoading(false);
+      })
+      .catch(e => {
+        if (id === catalogReq.current) {
+          setError(e.message || 'Unable to read the vault.');
+          setLoading(false);
+        }
+      });
+    return () => { catalogReq.current++; };
+  }, [catalogRefresh, setCatalog]);
+
+  // Note / Home content lifecycle (decoupled from full-vault catalog reloads)
+  const hasHomeNote = useMemo(() => Boolean(catalog?.notes?.some(n => n.path === 'Home.md')), [catalog?.notes]);
+  useEffect(() => {
+    const needsNote = route.kind === 'note';
+    const needsHome = route.kind === 'overview' && hasHomeNote;
+    if (!needsNote && !needsHome) {
+      if (catalog) setLoading(false);
+      setError('');
+      setReviewError('');
+      return undefined;
+    }
+    const id = ++noteReq.current;
+    const targetPath = needsNote ? route.path : 'Home.md';
     setLoading(true);
     setError('');
     setReviewError('');
-    setData(null);
-    (async () => {
-      try {
-        const cat = await api('/api/catalog');
-        if (id !== request.current) return;
-        setCatalog(cat);
-        let result = null;
-        if (route.kind === 'note') result = await api('/api/note?path=' + encodeURIComponent(route.path));
-        else if (route.kind === 'overview' && cat.notes.some(n => n.path === 'Home.md')) result = await api('/api/note?path=Home.md');
-        if (id !== request.current) return;
+    api('/api/note?path=' + encodeURIComponent(targetPath))
+      .then(result => {
+        if (id !== noteReq.current) return;
         setData(result);
         setLoading(false);
-        const resolvedTitle = routeTitle(route, cat.notes, cat.projects);
-        setTabs(prev => prev.map(t => (t.id === activeTabRef.current ? { ...t, title: resolvedTitle } : t)));
-        if (route.kind === 'note' && !route.edit && result?.note?.path === route.path && cat.vaultId) {
-          const key = 'axiom-recent-notes:' + cat.vaultId;
+        if (needsNote && !route.edit && result?.note?.path === route.path && catalog?.vaultId) {
+          const key = 'axiom-recent-notes:' + catalog.vaultId;
           try {
             const stored = JSON.parse(localStorage.getItem(key) || '[]');
             const paths = [route.path, ...(Array.isArray(stored) ? stored.filter(p => typeof p === 'string' && p !== route.path) : [])].slice(0, 20);
             localStorage.setItem(key, JSON.stringify(paths));
-            setRecent({ vaultId: cat.vaultId, paths, error: '' });
+            setRecent({ vaultId: catalog.vaultId, paths, error: '' });
           } catch {
-            setRecent(previous => ({ vaultId: cat.vaultId, paths: [route.path, ...(previous.vaultId === cat.vaultId ? previous.paths.filter(p => p !== route.path) : [])].slice(0, 20), error: 'Recent notes could not be saved on this device.' }));
+            setRecent(previous => ({ vaultId: catalog.vaultId, paths: [route.path, ...(previous.vaultId === catalog.vaultId ? previous.paths.filter(p => p !== route.path) : [])].slice(0, 20), error: 'Recent notes could not be saved on this device.' }));
           }
         }
-      } catch (e) {
-        if (id === request.current) { setError(e.message || 'Unable to read the vault.'); setLoading(false); }
-      }
-    })();
-    return () => { request.current++; };
-  }, [route.kind, route.path, route.edit, route.id, route.kind === 'project' ? route.mode : null, refresh]);
+      })
+      .catch(e => {
+        if (id === noteReq.current) {
+          setError(e.message || 'Unable to load note.');
+          setLoading(false);
+        }
+      });
+    return () => { noteReq.current++; };
+  }, [route.kind, route.path, route.edit, hasHomeNote, noteRefresh, catalog]);
 
   useEffect(() => {
     if (route.kind !== 'note' || route.edit || !data || data.note.path !== route.path || !route.hash) return;
@@ -587,27 +597,46 @@ function MainApp({ detached = false }) {
     if (target) { target.scrollIntoView(); if (!target.hasAttribute('tabindex')) target.setAttribute('tabindex', '-1'); target.focus({ preventScroll: true }); }
   }, [route, data]);
 
-  const notes = catalog?.notes || [], projects = catalog?.projects || [], vault = catalog?.vaultName || 'Shared Brain';
-  const workspaceIcons = catalog?.workspaceIcons || {};
-  const unmapped = n => n.project !== 'global' && !projects.some(p => p.id === n.project);
-  const names = catalog?.workspaceNames || {}, workspaceGroups = catalog?.workspaceGroups || {};
-  const groups = [{ id: 'global', name: names.global || projects.find(p => p.id === 'global')?.name || 'General', icon: workspaceIcons.global, group: workspaceGroups.global || 'work', notes: notes.filter(n => n.project === 'global') }, ...projects.filter(p => p.id !== 'global').map(p => ({ id: p.id, name: names[p.id] || p.name, icon: workspaceIcons[p.id] ?? p.icon, group: workspaceGroups[p.id] || p.group || 'work', notes: notes.filter(n => n.project === p.id) }))];
-  const loose = notes.filter(unmapped);
-  if (loose.length) groups.push({ id: '__unmapped', name: names.__unmapped || 'Unmapped notes', icon: workspaceIcons.__unmapped, group: workspaceGroups.__unmapped || 'work', notes: loose });
-  groups.sort((a, b) => Number(a.group === 'home') - Number(b.group === 'home'));
+  const notes = useMemo(() => catalog?.notes || [], [catalog?.notes]);
+  const projects = useMemo(() => catalog?.projects || [], [catalog?.projects]);
+  const vault = catalog?.vaultName || 'Shared Brain';
+  const workspaceIcons = useMemo(() => catalog?.workspaceIcons || {}, [catalog?.workspaceIcons]);
+  const unmapped = useCallback(n => n.project !== 'global' && !projects.some(p => p.id === n.project), [projects]);
 
-  const pending = latest(notes.filter(pendingReview));
-  const reviewFilters = { workspace: route.reviewWorkspace || 'all', kind: route.reviewKind || 'all' };
-  const reviewScope = { reviewWorkspace: reviewFilters.workspace, reviewKind: reviewFilters.kind };
-  const matchesReviewFilter = note => (reviewFilters.workspace === 'all' || (unmapped(note) ? '__unmapped' : note.project) === reviewFilters.workspace) && (reviewFilters.kind === 'all' || (note.reviewKind || 'new') === reviewFilters.kind);
-  const scopedPending = pending.filter(matchesReviewFilter);
-  const collection = route.kind === 'search' ? (data?.items || []) : latest(notes.filter(n => route.kind === 'owner' ? n.owner === 'owner' : route.kind === 'agent' ? n.owner === 'agent' : route.kind === 'review' ? pendingReview(n) : route.kind === 'proposals' ? proposal(n) : route.kind === 'project' ? (route.id === '__unmapped' ? unmapped(n) : n.project === route.id) : true));
+  const groups = useMemo(() => {
+    const names = catalog?.workspaceNames || {}, workspaceGroups = catalog?.workspaceGroups || {};
+    const list = [
+      { id: 'global', name: names.global || projects.find(p => p.id === 'global')?.name || 'General', icon: workspaceIcons.global, group: workspaceGroups.global || 'work', notes: notes.filter(n => n.project === 'global') },
+      ...projects.filter(p => p.id !== 'global').map(p => ({ id: p.id, name: names[p.id] || p.name, icon: workspaceIcons[p.id] ?? p.icon, group: workspaceGroups[p.id] || p.group || 'work', notes: notes.filter(n => n.project === p.id) })),
+    ];
+    const loose = notes.filter(unmapped);
+    if (loose.length) list.push({ id: '__unmapped', name: names.__unmapped || 'Unmapped notes', icon: workspaceIcons.__unmapped, group: workspaceGroups.__unmapped || 'work', notes: loose });
+    list.sort((a, b) => Number(a.group === 'home') - Number(b.group === 'home'));
+    return list;
+  }, [catalog, notes, projects, workspaceIcons, unmapped]);
 
-  const refreshView = () => {
+  const pending = useMemo(() => latest(notes.filter(pendingReview)), [notes]);
+  const reviewFilters = useMemo(() => ({ workspace: route.reviewWorkspace || 'all', kind: route.reviewKind || 'all' }), [route.reviewWorkspace, route.reviewKind]);
+  const reviewScope = useMemo(() => ({ reviewWorkspace: reviewFilters.workspace, reviewKind: reviewFilters.kind }), [reviewFilters]);
+  const matchesReviewFilter = useCallback(
+    note => (reviewFilters.workspace === 'all' || (unmapped(note) ? '__unmapped' : note.project) === reviewFilters.workspace) && (reviewFilters.kind === 'all' || (note.reviewKind || 'new') === reviewFilters.kind),
+    [reviewFilters, unmapped],
+  );
+  const scopedPending = useMemo(() => pending.filter(matchesReviewFilter), [pending, matchesReviewFilter]);
+  const collection = useMemo(() => {
+    if (route.kind === 'search') return data?.items || [];
+    return latest(notes.filter(n => route.kind === 'owner' ? n.owner === 'owner' : route.kind === 'agent' ? n.owner === 'agent' : route.kind === 'review' ? pendingReview(n) : route.kind === 'proposals' ? proposal(n) : route.kind === 'project' ? (route.id === '__unmapped' ? unmapped(n) : n.project === route.id) : true));
+  }, [route.kind, route.id, data?.items, notes, unmapped]);
+
+  const refreshView = useCallback(() => {
     confirmLeaveDirty().then(ok => {
-      if (ok) { dirty.current = false; setRefresh(n => n + 1); }
+      if (ok) {
+        dirty.current = false;
+        setCatalogRefresh(n => n + 1);
+        setNoteRefresh(n => n + 1);
+      }
     });
-  };
+  }, [confirmLeaveDirty]);
 
   const handleClick = event => {
     const link = event.target.closest('a[href]');
@@ -620,18 +649,25 @@ function MainApp({ detached = false }) {
     navigate(routeFrom(url), 'push', false, { newTab: event.ctrlKey || event.metaKey });
   };
 
-  const save = (note, html) => {
+  const save = useCallback((note, html, exitAfter = false) => {
     dirty.current = false;
     setExternalChangedPath('');
     setTabs(prev => setTabDirty(prev, activeTabRef.current, false));
-    const next = { ...routeRef.current, kind: 'note', path: note.path, edit: true };
+    const next = { ...routeRef.current, kind: 'note', path: note.path, edit: !exitAfter };
     routeRef.current = next;
     history.replaceState({}, '', routeUrl(next));
     setCatalog(c => c ? { ...c, notes: [...c.notes.filter(n => n.path !== note.path), note] } : c);
     setData({ note, html });
     setRoute(next);
-    api('/api/catalog').then(setCatalog).catch(e => setError(e.message));
-  };
+    showToast({ message: `Saved ${note.title}` });
+  }, [setCatalog]);
+
+  const mergeReviewedNotes = useCallback(updatedNotes => {
+    if (!updatedNotes?.length) return;
+    const byPath = new Map(updatedNotes.map(n => [n.path, n]));
+    setCatalog(c => c ? { ...c, notes: c.notes.map(n => (byPath.has(n.path) ? { ...n, ...byPath.get(n.path) } : n)) } : c);
+    setData(d => (d?.note && byPath.has(d.note.path) ? { ...d, note: { ...d.note, ...byPath.get(d.note.path) } } : d));
+  }, [setCatalog]);
 
   const stepReview = useCallback((delta = 1, items = scopedPending, current = data?.note?.path) => {
     if (!items.length) { navigate({ kind: 'review', ...reviewScope }); return; }
@@ -648,31 +684,44 @@ function MainApp({ detached = false }) {
     setReviewBusy(true);
     setReviewError('');
     try {
+      const targetNote = data.note;
       const result = await apiMutate('/api/note-review', {
         method: 'PUT',
-        body: { path: data.note.path, expectedRevision: data.note.revision, decision },
+        body: { path: targetNote.path, expectedRevision: targetNote.revision, decision },
       });
-      if (routeRef.current.kind === 'note' && routeRef.current.path === result.note.path && !routeRef.current.edit) setData(result);
-      setCatalog(c => c ? { ...c, notes: c.notes.map(n => n.path === result.note.path ? { ...n, ...result.note } : n) } : c);
-      try {
-        const fresh = await api('/api/catalog');
-        setCatalog(fresh);
-        if (advance && routeRef.current.kind === 'note' && routeRef.current.path === result.note.path && !routeRef.current.edit) {
-          const freshPending = latest(fresh.notes.filter(pendingReview).filter(matchesReviewFilter));
-          const index = scopedPending.findIndex(n => n.path === result.note.path);
-          const ordered = index < 0 ? [] : scopedPending.slice(index + 1).concat(scopedPending.slice(0, index));
-          const next = ordered.find(n => freshPending.some(f => f.path === n.path)) || freshPending[0];
-          navigate(next ? { kind: 'note', path: next.path, ...reviewScope } : { kind: 'review', ...reviewScope });
-        }
-      } catch {
-        setReviewError('Review saved, but the queue could not be refreshed. Refresh the vault to continue.');
+      mergeReviewedNotes([result.note]);
+      if (routeRef.current.kind === 'note' && routeRef.current.path === result.note.path && !routeRef.current.edit) {
+        setData(result);
+      }
+      if (decision === 'reviewed') {
+        const revPath = result.note.path;
+        const revHash = result.note.revision;
+        showToast({
+          message: `Approved ${result.note.title}`,
+          actionLabel: 'Undo',
+          onAction: () => {
+            apiMutate('/api/note-review', {
+              method: 'PUT',
+              body: { path: revPath, expectedRevision: revHash, decision: 'unreviewed' },
+            })
+              .then(undoRes => mergeReviewedNotes([undoRes.note]))
+              .catch(err => showToast({ message: err.message || 'Undo failed.', tone: 'error' }));
+          },
+        });
+      }
+      if (advance && routeRef.current.kind === 'note' && routeRef.current.path === result.note.path && !routeRef.current.edit) {
+        const remaining = scopedPending.filter(n => n.path !== result.note.path);
+        const index = scopedPending.findIndex(n => n.path === result.note.path);
+        const ordered = index < 0 ? remaining : scopedPending.slice(index + 1).concat(scopedPending.slice(0, index)).filter(n => n.path !== result.note.path);
+        const next = ordered[0] || remaining[0];
+        navigate(next ? { kind: 'note', path: next.path, ...reviewScope } : { kind: 'review', ...reviewScope });
       }
     } catch (e) {
       setReviewError(e.status === 409 ? 'This note changed since you opened it. Refresh before reviewing.' : (e.message || 'Could not save review. Try again.'));
     } finally {
       setReviewBusy(false);
     }
-  }, [reviewBusy, data, confirmLeaveDirty, matchesReviewFilter, scopedPending, navigate, reviewScope]);
+  }, [reviewBusy, data, confirmLeaveDirty, mergeReviewedNotes, scopedPending, navigate, reviewScope]);
 
   const selectTab = useCallback(tabId => {
     const target = tabsRef.current.find(t => t.id === tabId);
@@ -813,7 +862,7 @@ function MainApp({ detached = false }) {
       }
       if (event.key === 'Escape' && document.activeElement === input.current && input.current.value) {
         event.preventDefault();
-        navigate({ kind: 'overview' }, 'replace');
+        navigate(lastBrowseRouteRef.current || { kind: 'overview' }, 'replace');
         return;
       }
 
@@ -848,32 +897,39 @@ function MainApp({ detached = false }) {
     return () => document.removeEventListener('keydown', keys);
   }, [detached, navigate, handleCloseTab, selectTab, applyZoom, zoomPercent, data, stepReview, review, reviewScope]);
 
-  const statusMetrics = React.useMemo(() => {
-    if (route.kind === 'note' && route.edit && editorStats) return editorStats;
-    if (route.kind === 'note' && data?.note?.content) {
+  const statusMetrics = useMemo(() => {
+    if (route.kind === 'note' && !route.edit && data?.note?.content) {
       const words = data.note.content.trim() ? data.note.content.trim().split(/\s+/).length : 0;
       return { words, revision: data.note.revision };
     }
     return null;
-  }, [route.kind, route.edit, editorStats, data?.note]);
+  }, [route.kind, route.edit, data?.note]);
 
   const nav = [['overview', 'Overview', LayoutDashboard], ['all', 'All notes', FileText], ['owner', 'Your notes', UserRound], ['agent', 'Agent memory', Bot], ['review', 'Review queue', Inbox], ['projects', 'Workspaces', FolderKanban], ['cleanup', 'Clean up', ScanSearch], ['trash', 'Trash', Trash2]];
 
+  const hasCurrentNote = Boolean(data?.note && (route.kind === 'note' ? data.note.path === route.path : true));
+  const reviewQueueIndex = useMemo(() => {
+    if (!data?.note?.path) return -1;
+    return scopedPending.findIndex(n => n.path === data.note.path);
+  }, [scopedPending, data?.note?.path]);
+
   let content;
-  if (loading) content = <div className="boot">Reading your vault…</div>;
-  else if (error && !data && route.kind !== 'new') content = <><h1>Could not load this view</h1><p className="muted">Your source files have not been changed.</p><button className="button" onClick={refreshView}>Try again</button></>;
-  else if (route.kind === 'new' || (route.kind === 'note' && route.edit && data)) {
+  if (!catalog && loading) content = <div className="boot">Reading your vault…</div>;
+  else if (error && !catalog) content = <><h1>Could not load this view</h1><p className="muted">Your source files have not been changed.</p><button className="button" onClick={refreshView}>Try again</button></>;
+  else if (route.kind === 'note' && error && !hasCurrentNote) content = <><h1>Could not load this note</h1><p className="muted">Your source files have not been changed.</p><button className="button" onClick={refreshView}>Try again</button></>;
+  else if (route.kind === 'new' || (route.kind === 'note' && route.edit && hasCurrentNote)) {
     content = (
       <Suspense fallback={<div className="boot">Opening editor...</div>}>
         <MarkdownEditor
           key={JSON.stringify([catalog?.vaultId, route.kind === 'new' ? null : route.path])}
           initialNote={route.kind === 'new' ? null : data.note}
           notes={notes}
+          groups={groups}
           vaultName={vault}
           vaultId={catalog?.vaultId}
           externalChanged={externalChangedPath === (route.kind === 'new' ? '' : route.path)}
           onSaved={save}
-          onStatsChange={setEditorStats}
+          onOpenSplit={setSplitRoute}
           onDirtyChange={value => {
             dirty.current = value;
             setTabs(prev => setTabDirty(prev, activeTabRef.current, value));
@@ -883,7 +939,8 @@ function MainApp({ detached = false }) {
       </Suspense>
     );
   }
-  else if (route.kind === 'note' && data) {
+  else if (route.kind === 'note' && !hasCurrentNote && loading) content = <div className="boot">Loading note…</div>;
+  else if (route.kind === 'note' && hasCurrentNote) {
     content = (
       <Reader
         key={JSON.stringify([catalog?.vaultId, data.note.path])}
@@ -892,12 +949,14 @@ function MainApp({ detached = false }) {
         vaultName={vault}
         groups={groups}
         reviewScope={reviewScope}
+        queuePosition={reviewQueueIndex >= 0 ? reviewQueueIndex + 1 : 0}
+        queueTotal={scopedPending.length}
         onReview={review}
         reviewBusy={reviewBusy}
         reviewError={reviewError}
         onNext={() => stepReview(1)}
         onPrev={() => stepReview(-1)}
-        onDelete={() => setManagement('note')}
+        onDelete={() => { setDeleteTarget(data.note); setManagement('note'); }}
         onOpenNote={p => navigate({ kind: 'note', path: p })}
         onOpenSplit={r => setSplitRoute(r)}
         onRestored={({ note, html }) => {
@@ -908,13 +967,13 @@ function MainApp({ detached = false }) {
     );
   }
   else if (route.kind === 'overview') content = <Overview notes={notes} groups={groups} data={data} activity={activity} setActivity={setActivity} />;
-  else if (route.kind === 'trash') content = <Trash onRestored={() => api('/api/catalog').then(setCatalog).catch(e => setError(e.message))} />;
-  else if (route.kind === 'search') content = <><PageHeading title="Search results" description={`Matches for “${route.query}” in ${route.scope === 'active' ? 'active knowledge' : 'all notes'}.`} /><SearchResults key={JSON.stringify([route.query, route.workspace, route.owner, route.review, route.scope, route.mode])} query={route.query} groups={groups} filters={{ workspace: route.workspace || '', owner: route.owner || '', review: route.review || '', scope: route.scope || 'all', mode: route.mode || 'hybrid' }} onFiltersChange={filters => navigate({ ...route, ...filters })} /></>;
-  else if (route.kind === 'health') content = <><PageHeading title="Memory health" description="Actionable findings, with uncertainty and provenance preserved." /><p><a className="button" href={routeUrl({ kind: 'cleanup' })}>Clean up notes <ArrowRight size={16} aria-hidden="true" /></a></p><MemoryHealth groups={groups} onOpenNote={p => navigate({ kind: 'note', path: p })} /></>;
-  else if (route.kind === 'cleanup') content = <Cleanup vaultId={catalog?.vaultId} groups={groups} onCatalogChanged={() => api('/api/catalog').then(value => { if (routeRef.current.kind === 'cleanup') setCatalog(value); }).catch(e => { if (routeRef.current.kind === 'cleanup') setError(e.message); })} />;
-  else if (route.kind === 'usage') content = <UsagePage groups={groups} />;
-  else if (route.kind === 'harnesses') content = <HarnessPage />;
-  else if (route.kind === 'recovery') content = <RecoveryPage />;
+  else if (route.kind === 'trash') content = <Suspense fallback={<div className="boot">Loading Trash…</div>}><Trash onRestored={() => setCatalogRefresh(n => n + 1)} /></Suspense>;
+  else if (route.kind === 'search') content = <><PageHeading title="Search results" description={`Matches for “${route.query}” in ${route.scope === 'active' ? 'active knowledge' : 'all notes'}.`} /><SearchResults query={route.query} groups={groups} filters={{ workspace: route.workspace || '', owner: route.owner || '', review: route.review || '', scope: route.scope || 'all', mode: route.mode || 'hybrid' }} onFiltersChange={filters => navigate({ ...route, ...filters })} /></>;
+  else if (route.kind === 'health') content = <><PageHeading title="Memory health" description="Actionable findings, with uncertainty and provenance preserved." /><p><a className="button" href={routeUrl({ kind: 'cleanup' })}>Clean up notes <ArrowRight size={16} aria-hidden="true" /></a></p><Suspense fallback={<div className="boot">Checking memory…</div>}><MemoryHealth groups={groups} onOpenNote={p => navigate({ kind: 'note', path: p })} /></Suspense></>;
+  else if (route.kind === 'cleanup') content = <Suspense fallback={<div className="boot">Loading clean up…</div>}><Cleanup vaultId={catalog?.vaultId} groups={groups} onOpenSplit={setSplitRoute} onCatalogChanged={() => setCatalogRefresh(n => n + 1)} /></Suspense>;
+  else if (route.kind === 'usage') content = <Suspense fallback={<div className="boot">Loading usage…</div>}><UsagePage groups={groups} /></Suspense>;
+  else if (route.kind === 'harnesses') content = <Suspense fallback={<div className="boot">Loading harnesses…</div>}><HarnessPage /></Suspense>;
+  else if (route.kind === 'recovery') content = <Suspense fallback={<div className="boot">Loading recovery…</div>}><RecoveryPage /></Suspense>;
   else if (route.kind === 'projects') content = <><div className="page-heading"><div><p className="eyebrow">Library</p><h1>Workspaces</h1><p className="page-description">Explore notes and their connections by workspace.</p></div><a className="button button-soft" href="/?project=__all&mode=graph"><Network size={17} aria-hidden="true" /> Full-vault graph</a></div>{['work', 'home'].map(folder => <section className="workspace-card-group" key={folder}><h2>{folder === 'home' ? 'Home' : 'Work'}</h2><div className="project-grid project-grid-full">{groups.filter(g => g.group === folder).map(g => <ProjectCard key={g.id} group={g} />)}</div></section>)}</>;
   else if (route.kind === 'project') {
     const isAll = route.id === '__all';
@@ -936,14 +995,14 @@ function MainApp({ detached = false }) {
           </nav>
         )}
         {!isAll && route.mode === 'overview'
-          ? <WorkspaceOverview key={route.id} id={route.id} label={projectLabel(route.id, groups)} onOpenNote={p => navigate({ kind: 'note', path: p })} />
+          ? <Suspense fallback={<div className="boot">Loading workspace…</div>}><WorkspaceOverview key={route.id} id={route.id} label={projectLabel(route.id, groups)} onOpenNote={p => navigate({ kind: 'note', path: p })} /></Suspense>
           : !isAll && route.mode === 'notes'
             ? <Library collection={collection} visible={visible} setVisible={setVisible} />
-            : <Suspense fallback={<div className="boot">Opening workspace graph…</div>}><WorkspaceGraph project={route.id} label={projectLabel(route.id, groups)} vaultName={vault} onOpenNote={p => navigate({ kind: 'note', path: p })} onOpenSplit={r => setSplitRoute(r)} /></Suspense>}
+            : <Suspense fallback={<div className="boot">Opening workspace graph…</div>}><WorkspaceGraph project={route.id} label={projectLabel(route.id, groups)} groups={groups} vaultName={vault} onOpenNote={p => navigate({ kind: 'note', path: p })} onOpenSplit={r => setSplitRoute(r)} /></Suspense>}
       </>
     );
   }
-  else if (route.kind === 'review' || route.kind === 'proposals') content = <><PageHeading title="Review queue" description="Check agent notes without promoting them to owner policy." /><nav className="filter-links" aria-label="Review collection"><a className={route.kind === 'review' ? 'active' : ''} href={routeUrl({ kind: 'review', ...reviewScope })}>Unreviewed · {pending.length}</a><a className={route.kind === 'proposals' ? 'active' : ''} href={routeUrl({ kind: 'proposals' })}>Proposals · {notes.filter(proposal).length}</a></nav>{route.kind === 'review' ? <ReviewInbox notes={pending} groups={groups} filters={reviewFilters} onFiltersChange={filters => navigate({ kind: 'review', reviewWorkspace: filters.workspace, reviewKind: filters.kind })} onOpenNote={p => navigate({ kind: 'note', path: p, ...reviewScope })} /> : <Library collection={collection} visible={visible} setVisible={setVisible} />}</>;
+  else if (route.kind === 'review' || route.kind === 'proposals') content = <><PageHeading title="Review queue" description="Check agent notes without promoting them to owner policy." /><nav className="filter-links" aria-label="Review collection"><a className={route.kind === 'review' ? 'active' : ''} href={routeUrl({ kind: 'review', ...reviewScope })}>Unreviewed · {pending.length}</a><a className={route.kind === 'proposals' ? 'active' : ''} href={routeUrl({ kind: 'proposals' })}>Proposals · {notes.filter(proposal).length}</a></nav>{route.kind === 'review' ? <ReviewInbox notes={pending} groups={groups} filters={reviewFilters} onFiltersChange={filters => navigate({ kind: 'review', reviewWorkspace: filters.workspace, reviewKind: filters.kind })} onOpenNote={p => navigate({ kind: 'note', path: p, ...reviewScope })} onEditNote={p => navigate({ kind: 'note', path: p, edit: true, ...reviewScope })} onNotesReviewed={mergeReviewedNotes} onDeleteNote={note => { setDeleteTarget(note); setManagement('note'); }} /> : <Library collection={collection} visible={visible} setVisible={setVisible} />}</>;
   else content = <><PageHeading title={labels[route.kind]} description="A shared library, with ownership and provenance intact." /><div className="library-toolbar"><div className="filter-links">{[['all', 'Everything'], ['owner', 'Your notes'], ['agent', 'Agent memory'], ['proposals', 'Proposals']].map(([kind, label]) => <a key={kind} className={route.kind === kind ? 'active' : ''} href={routeUrl({ kind })}>{label}</a>)}</div><span className="result-count">{collection.length} {collection.length === 1 ? 'note' : 'notes'}</span></div><Library collection={collection} visible={visible} setVisible={setVisible} /></>;
 
   const desktopShell = !detached && isDesktop();
@@ -957,6 +1016,14 @@ function MainApp({ detached = false }) {
       : route.kind !== 'overview'
         ? routeTitle(route, notes, projects)
         : '';
+
+  const wideContent = Boolean(
+    splitRoute
+    || route.kind === 'review'
+    || route.kind === 'usage'
+    || (route.kind === 'project' && (route.id === '__all' || route.mode === 'graph')),
+  );
+  const dotTone = error || backendInfo?.healthy === false ? 'error' : sseStatus === 'connected' ? 'live' : 'warn';
 
   const titleBarEl = (
     <TitleBar
@@ -992,7 +1059,7 @@ function MainApp({ detached = false }) {
             <nav className="utility-nav" aria-label="Knowledge tools">{[['health', 'Health', Activity], ['usage', 'Usage', List], ['harnesses', 'Harnesses', Plug], ['recovery', 'Backups', DatabaseBackup]].map(([kind, label, Icon]) => <a key={kind} href={routeUrl({ kind })} aria-current={route.kind === kind ? 'page' : undefined}><Icon size={16} aria-hidden="true" />{label}</a>)}</nav>
             <div className="sidebar-section"><span>WORKSPACES</span><a href="/?project=__all&mode=graph">Graph <Network size={14} aria-hidden="true" /></a></div>
             <nav className="project-nav" aria-label="Workspaces">{['work', 'home'].map(folder => <div key={folder}><button className="workspace-folder" type="button" aria-expanded={!collapsed[folder]} onClick={() => { const next = { ...collapsed, [folder]: !collapsed[folder] }; setCollapsed(next); try { localStorage.setItem('axiom-workspace-folders', JSON.stringify(next)); } catch {} }}><ChevronRight size={16} className={collapsed[folder] ? '' : 'expanded'} aria-hidden="true" />{folder === 'home' ? 'Home' : 'Work'}</button>{!collapsed[folder] && groups.filter(g => g.group === folder).map(g => <a key={g.id} className={route.kind === 'project' && route.id === g.id ? 'active' : ''} aria-current={route.kind === 'project' && route.id === g.id ? 'page' : undefined} href={routeUrl({ kind: 'project', id: g.id })}><WorkspaceIcon name={g.icon} />{projectLabel(g.id, groups)}<span className="nav-count">{g.notes.length}</span></a>)}</div>)}</nav>
-            <div className="sidebar-bottom"><a className="guard-note" href={noteUrl('Owner/Policies.md')}><ShieldCheck size={18} strokeWidth={1.7} aria-hidden="true" /><span>Owner notes stay yours<small>Rule-level safeguards, not isolation</small></span></a><div className="connection"><span className="connection-dot" />{error ? 'Vault unavailable' : catalog ? (sseStatus === 'connected' ? 'Vault live' : 'Vault connected') : 'Connecting to vault'}</div></div>
+            <div className="sidebar-bottom"><a className="guard-note" href={noteUrl('Owner/Policies.md')}><ShieldCheck size={18} strokeWidth={1.7} aria-hidden="true" /><span>Owner notes stay yours<small>Rule-level safeguards, not isolation</small></span></a><div className="connection"><span className={`connection-dot connection-dot-${dotTone}`} />{error ? 'Vault unavailable' : catalog ? (sseStatus === 'connected' ? 'Vault live' : 'Reconnecting') : 'Connecting to vault'}</div></div>
           </aside>
         </>
       )}
@@ -1001,9 +1068,9 @@ function MainApp({ detached = false }) {
           <>
             <header className="topbar">
               <div className="workspace-title">{topbarLabel}</div>
-              <label className="global-search"><Search size={18} strokeWidth={1.7} aria-hidden="true" /><span className="sr-only">Search the vault</span><input ref={input} type="search" value={query} placeholder="Search notes, decisions, ideas…" onChange={e => { const value = e.target.value; setQuery(value); clearTimeout(timer.current); timer.current = setTimeout(() => navigate(value.trim() ? { ...(routeRef.current.kind === 'search' ? routeRef.current : {}), kind: 'search', query: value } : { kind: 'overview' }, 'replace'), 160); }} /><kbd>/</kbd></label>
+              <label className="global-search"><Search size={18} strokeWidth={1.7} aria-hidden="true" /><span className="sr-only">Search the vault</span><input ref={input} type="search" value={query} placeholder="Search notes, decisions, ideas…" onChange={e => { const value = e.target.value; setQuery(value); clearTimeout(timer.current); timer.current = setTimeout(() => navigate(value.trim() ? { ...(routeRef.current.kind === 'search' ? routeRef.current : {}), kind: 'search', query: value } : (lastBrowseRouteRef.current || { kind: 'overview' }), 'replace'), 160); }} /><kbd>/</kbd></label>
               <div className="topbar-actions">
-                <Notifications catalog={catalog} groups={groups} pendingCount={pending.length} onCatalog={setCatalog} onOpenNote={p => { if (!navigate({ kind: 'note', path: p })) return false; setRefresh(value => value + 1); return true; }} onOpenReview={() => navigate({ kind: 'review' })} />
+                <Notifications catalog={catalog} groups={groups} pendingCount={pending.length} onCatalog={setCatalog} onOpenNote={p => { if (!navigate({ kind: 'note', path: p })) return false; setNoteRefresh(value => value + 1); return true; }} onOpenReview={() => navigate({ kind: 'review' })} />
                 <button className="icon-button" type="button" onClick={() => setPaletteOpen(true)} aria-label="Open command palette" title="Command palette · Ctrl+K"><Command size={18} aria-hidden="true" /></button>
                 <button className="icon-button" type="button" onClick={refreshView} aria-label="Refresh vault" title="Refresh vault"><RefreshCw size={18} strokeWidth={1.7} aria-hidden="true" /></button>
                 <a className="button button-primary" href="/?edit=1"><Plus size={18} strokeWidth={1.7} aria-hidden="true" /> New note</a>
@@ -1027,8 +1094,14 @@ function MainApp({ detached = false }) {
           className={splitRoute ? 'split-workspace' : undefined}
           style={splitRoute ? { '--split-width': `${splitPercent}%` } : undefined}
         >
-          <div className="page-content">
-            <div role="status" aria-live="polite">{error && <div className="error-notice">{error}</div>}</div>
+          <div className={wideContent ? 'page-content page-content-wide' : 'page-content'}>
+            <div role="status" aria-live="polite">
+              {error && (
+                <div className="error-notice">
+                  {error} <button type="button" className="button" onClick={refreshView}>Retry</button>
+                </div>
+              )}
+            </div>
             <div aria-busy={loading}>{content}</div>
           </div>
           {splitRoute && (
@@ -1043,7 +1116,7 @@ function MainApp({ detached = false }) {
                 aria-valuemin={25}
                 aria-valuemax={70}
                 onPointerDown={startSplitResize}
-                onDoubleClick={() => setSplitPercent(50)}
+                onDoubleClick={() => setSplitPercent(44)}
                 onKeyDown={event => {
                   if (event.key === 'ArrowLeft') {
                     event.preventDefault();
@@ -1056,6 +1129,7 @@ function MainApp({ detached = false }) {
               />
               <SplitPane
                 splitRoute={splitRoute}
+                groups={groups}
                 vaultName={vault}
                 onClose={() => setSplitRoute(null)}
                 onChangeSplitRoute={setSplitRoute}
@@ -1064,8 +1138,39 @@ function MainApp({ detached = false }) {
             </>
           )}
         </div>
-        {management === 'note' && data?.note && <DeleteNote note={data.note} onClose={() => setManagement(null)} onDeleted={() => { setManagement(null); navigate({ kind: 'all' }); setRefresh(n => n + 1); }} />}
-        {management === 'workspace' && <WorkspaceSettings key={route.id} id={route.id} onClose={() => setManagement(null)} onChanged={() => { setManagement(null); setRefresh(n => n + 1); }} onDeleted={() => { setManagement(null); navigate({ kind: 'projects' }); setRefresh(n => n + 1); }} />}
+        {management === 'note' && (deleteTarget || data?.note) && (
+          <Suspense fallback={null}>
+            <DeleteNote
+              note={deleteTarget || data.note}
+              onClose={() => { setManagement(null); setDeleteTarget(null); }}
+              onDeleted={() => {
+                const deleted = deleteTarget || data.note;
+                setManagement(null);
+                setDeleteTarget(null);
+                setCatalog(c => c ? { ...c, notes: c.notes.filter(n => n.path !== deleted.path) } : c);
+                setCatalogRefresh(n => n + 1);
+                if (routeRef.current.kind === 'review') return;
+                if (routeRef.current.kind === 'note' && pendingReview(deleted)) {
+                  const next = scopedPending.find(n => n.path !== deleted.path);
+                  navigate(next ? { kind: 'note', path: next.path, ...reviewScope } : { kind: 'review', ...reviewScope });
+                } else {
+                  navigate({ kind: 'all' });
+                }
+              }}
+            />
+          </Suspense>
+        )}
+        {management === 'workspace' && (
+          <Suspense fallback={null}>
+            <WorkspaceSettings
+              key={route.id}
+              id={route.id}
+              onClose={() => setManagement(null)}
+              onChanged={() => { setManagement(null); setCatalogRefresh(n => n + 1); }}
+              onDeleted={() => { setManagement(null); navigate({ kind: 'projects' }); setCatalogRefresh(n => n + 1); }}
+            />
+          </Suspense>
+        )}
         <CommandPalette
           open={paletteOpen}
           onClose={() => setPaletteOpen(false)}
@@ -1078,38 +1183,42 @@ function MainApp({ detached = false }) {
           vaultId={catalog?.vaultId}
           recent={recent}
         />
-        <DesktopSettings
-          open={settingsOpen}
-          groups={groups}
-          pendingUpdate={updateInfo}
-          onUpdateInfo={setUpdateInfo}
-          onInstallUpdate={async () => {
-            if (dirty.current || tabs.some(t => t.dirty)) {
-              const ok = await confirm({
-                title: 'Unsaved changes',
-                message: 'You have unsaved editor changes. Download and restart Axiom to apply the update anyway?',
-                confirmLabel: 'Update & restart',
-                danger: true,
-              });
-              if (!ok) return;
-            }
-            await installDesktopUpdate();
-          }}
-          onClose={() => setSettingsOpen(false)}
-          onZoomChange={z => applyZoom(z, false)}
-          onRequestQuit={async () => {
-            if (dirty.current || tabs.some(t => t.dirty)) {
-              const ok = await confirm({
-                title: 'Unsaved changes',
-                message: 'You have unsaved editor changes. Quit Axiom without saving?',
-                confirmLabel: 'Quit anyway',
-                danger: true,
-              });
-              if (!ok) return;
-            }
-            quitDesktop();
-          }}
-        />
+        {settingsOpen && (
+          <Suspense fallback={null}>
+            <DesktopSettings
+              open={settingsOpen}
+              groups={groups}
+              pendingUpdate={updateInfo}
+              onUpdateInfo={setUpdateInfo}
+              onInstallUpdate={async () => {
+                if (dirty.current || tabs.some(t => t.dirty)) {
+                  const ok = await confirm({
+                    title: 'Unsaved changes',
+                    message: 'You have unsaved editor changes. Download and restart Axiom to apply the update anyway?',
+                    confirmLabel: 'Update & restart',
+                    danger: true,
+                  });
+                  if (!ok) return;
+                }
+                await installDesktopUpdate();
+              }}
+              onClose={() => setSettingsOpen(false)}
+              onZoomChange={z => applyZoom(z, false)}
+              onRequestQuit={async () => {
+                if (dirty.current || tabs.some(t => t.dirty)) {
+                  const ok = await confirm({
+                    title: 'Unsaved changes',
+                    message: 'You have unsaved editor changes. Quit Axiom without saving?',
+                    confirmLabel: 'Quit anyway',
+                    danger: true,
+                  });
+                  if (!ok) return;
+                }
+                quitDesktop();
+              }}
+            />
+          </Suspense>
+        )}
       </main>
     </div>
   );
@@ -1120,11 +1229,13 @@ function MainApp({ detached = false }) {
         {dialog}
         {titleBarEl}
         {shellEl}
+        <ToastViewport />
         <StatusBar
           sseStatus={sseStatus}
           backendInfo={backendInfo}
           updateInfo={updateInfo}
           stats={statusMetrics}
+          isEditing={route.kind === 'new' || (route.kind === 'note' && route.edit)}
           pendingCount={pending.length}
           zoomPercent={zoomPercent}
           onOpenSettings={() => setSettingsOpen(true)}
@@ -1140,6 +1251,7 @@ function MainApp({ detached = false }) {
       {dialog}
       {titleBarEl}
       {shellEl}
+      <ToastViewport />
     </>
   );
 }

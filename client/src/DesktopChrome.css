@@ -953,6 +953,80 @@ mark[data-axiom-find="current"] {
   padding: 8px 24px;
 }
 
+.desktop-frame .review-actions {
+  top: 56px;
+}
+
+.desktop-frame .reader-side {
+  top: 68px;
+  max-height: calc(100vh - 140px);
+}
+
+.toast-viewport {
+  position: fixed;
+  right: 18px;
+  bottom: 38px;
+  z-index: 95;
+  display: grid;
+  gap: 8px;
+  max-width: min(380px, calc(100vw - 36px));
+}
+
+.toast {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 12px;
+  border: 1px solid var(--accent-border);
+  border-radius: 10px;
+  background: var(--surface-raised);
+  color: var(--fg);
+  font-size: 12px;
+  box-shadow: 0 10px 28px rgba(0, 0, 0, 0.45);
+}
+
+.toast-error {
+  border-color: var(--error);
+  background: var(--error-surface);
+  color: var(--error);
+}
+
+.toast-message {
+  flex: 1;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.toast-action {
+  border: 1px solid var(--accent);
+  border-radius: 6px;
+  padding: 4px 9px;
+  background: var(--accent);
+  color: var(--on-accent);
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.toast-close {
+  display: grid;
+  place-items: center;
+  width: 22px;
+  height: 22px;
+  border: 0;
+  border-radius: 5px;
+  background: transparent;
+  color: var(--muted);
+}
+
+.toast-close:hover {
+  background: var(--surface);
+  color: var(--fg);
+}
+
+.statusbar-dot-error {
+  background: #e06c6c;
+}
+
 .desktop-frame .split-secondary-pane {
   top: 52px;
   max-height: calc(100vh - 120px);

@@ -1,11 +1,13 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { isDesktop } from './desktop-bridge.mjs';
+import { getEditorStats, subscribeEditorStats } from './editor-stats-store.mjs';
 
 export default function StatusBar({
   sseStatus,
   backendInfo,
   updateInfo,
   stats,
+  isEditing = false,
   pendingCount,
   zoomPercent,
   onOpenSettings,
@@ -13,13 +15,32 @@ export default function StatusBar({
   onResetZoom,
 }) {
   const [copiedRev, setCopiedRev] = useState(false);
+  const [liveEditorStats, setLiveEditorStats] = useState(getEditorStats);
+
+  useEffect(() => {
+    if (!isEditing) {
+      setLiveEditorStats(null);
+      return undefined;
+    }
+    setLiveEditorStats(getEditorStats());
+    return subscribeEditorStats(setLiveEditorStats);
+  }, [isEditing]);
 
   if (!isDesktop()) return null;
 
+  const activeStats = isEditing ? (liveEditorStats || stats) : stats;
+  const backendHealthy = backendInfo ? backendInfo.healthy : sseStatus === 'connected';
+  const dotTone = sseStatus === 'connected' && backendHealthy ? 'live' : backendInfo?.healthy === false ? 'error' : 'warn';
+  const statusText = backendInfo?.healthy === false
+    ? 'Backend disconnected'
+    : sseStatus === 'connected'
+      ? 'Vault live'
+      : 'Reconnecting';
+
   const copyRev = async () => {
-    if (!stats?.revision) return;
+    if (!activeStats?.revision) return;
     try {
-      await navigator.clipboard.writeText(stats.revision);
+      await navigator.clipboard.writeText(activeStats.revision);
       setCopiedRev(true);
       setTimeout(() => setCopiedRev(false), 1400);
     } catch {}
@@ -34,8 +55,8 @@ export default function StatusBar({
           onClick={onOpenSettings}
           title="Open desktop settings"
         >
-          <span className={`statusbar-dot statusbar-dot-${sseStatus === 'connected' ? 'live' : 'warn'}`} />
-          <span>{sseStatus === 'connected' ? 'Vault live' : 'Reconnecting'}</span>
+          <span className={`statusbar-dot statusbar-dot-${dotTone}`} />
+          <span>{statusText}</span>
         </button>
         {backendInfo && (
           <button
@@ -51,25 +72,25 @@ export default function StatusBar({
       </div>
 
       <div className="desktop-statusbar-group">
-        {stats?.words !== undefined && (
+        {activeStats?.words !== undefined && (
           <span className="statusbar-item statusbar-muted">
-            <span>{stats.words.toLocaleString()} words</span>
-            <span className="statusbar-hide-narrow">· ~{Math.max(1, Math.ceil(stats.words / 220))} min read</span>
+            <span>{activeStats.words.toLocaleString()} words</span>
+            <span className="statusbar-hide-narrow">· ~{Math.max(1, Math.ceil(activeStats.words / 220))} min read</span>
           </span>
         )}
-        {stats?.line !== undefined && (
+        {activeStats?.line !== undefined && (
           <span className="statusbar-item statusbar-muted">
-            Ln {stats.line}, Col {stats.col}
+            Ln {activeStats.line}, Col {activeStats.col}
           </span>
         )}
-        {stats?.revision && (
+        {activeStats?.revision && (
           <button
             type="button"
             className="statusbar-item statusbar-mono"
             onClick={copyRev}
-            title={`Copy full revision (${stats.revision})`}
+            title={`Copy full revision (${activeStats.revision})`}
           >
-            {copiedRev ? 'Copied rev' : stats.revision.slice(0, 8)}
+            {copiedRev ? 'Copied rev' : activeStats.revision.slice(0, 8)}
           </button>
         )}
         {updateInfo?.available && updateInfo?.targetVersion && (
