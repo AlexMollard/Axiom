@@ -1,6 +1,6 @@
 import React, { lazy, Suspense, useCallback, useEffect, useRef, useState } from 'react';
 import { ArrowRight, ArrowUpRight, Bot, Check, ChevronDown, ChevronRight, FileText, FolderKanban, LayoutDashboard, List, Network, Plus, RefreshCw, Search, ShieldCheck, UserRound, Inbox, Undo2, Trash2, Settings, Activity, Plug, DatabaseBackup, Command, ScanSearch, Columns2, X } from 'lucide-react';
-import WorkspaceIcon from './WorkspaceIcon.jsx';
+import WorkspaceIcon, { registerWorkspaceIconNodes } from './WorkspaceIcon.jsx';
 import { DeleteNote, WorkspaceSettings, Trash } from './Management.jsx';
 import { SearchResults, CommandPalette } from './SearchExperience.jsx';
 import { ReviewInbox, ReviewDiff } from './ReviewInbox.jsx';
@@ -309,7 +309,14 @@ function MainApp({ detached = false }) {
   const [route, setRoute] = useState(routeFrom);
   const routeRef = useRef(route);
   const dirty = useRef(false);
-  const [catalog, setCatalog] = useState(null);
+  const [catalog, setCatalogState] = useState(null);
+  const setCatalog = useCallback(next => {
+    setCatalogState(prev => {
+      const resolved = typeof next === 'function' ? next(prev) : next;
+      if (resolved?.workspaceIconNodes) registerWorkspaceIconNodes(resolved.workspaceIconNodes);
+      return resolved;
+    });
+  }, []);
   const [data, setData] = useState(null);
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(true);

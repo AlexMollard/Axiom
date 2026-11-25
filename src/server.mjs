@@ -11,7 +11,7 @@ import MarkdownIt from 'markdown-it';
 import sanitizeHtml from 'sanitize-html';
 import { catalog, readNote, search, loadConfig, backup, saveFromEditor, saveReviewFromEditor, refreshEmbeddings, hash } from './memory.mjs';
 import { buildWorkspaceGraph } from './workspace-graph.mjs';
-import { readWorkspaceIcons, searchWorkspaceIcons } from './workspace-icons.mjs';
+import { readWorkspaceIcons, searchWorkspaceIcons, getWorkspaceIconNodes } from './workspace-icons.mjs';
 import { workspaceDetail, updateWorkspace, deleteNote, deleteWorkspace, listTrash, restoreTrash, protectedDeletionReason } from './management.mjs';
 import {getReviewDiff} from './review-history.mjs';
 import {getWorkspaceOverview, getMemoryHealth, getNoteKnowledge, getCaptureSuggestions} from './knowledge.mjs';
@@ -224,14 +224,19 @@ export function createServer(config, configId = null) {
       }
       if (url.pathname === '/api/catalog') {
         const { assignments: workspaceIcons } = await readWorkspaceIcons(config);
+        const workspaceIconNodes = await getWorkspaceIconNodes(Object.values(workspaceIcons));
         const workspaceNames = {global: config.workspaceNames?.global || 'General', __unmapped: config.workspaceNames?.__unmapped || 'Unmapped', ...Object.fromEntries(config.projects.map(({id, name}) => [id, name || id]))};
         const workspaceGroups = Object.fromEntries(Object.keys(workspaceNames).map(id => [id, config.workspaceGroups?.[id] === 'home' ? 'home' : 'work']));
         const notes = await catalog(config);
         const usageTracking = await inventoryUsage(config, notes);
-        return json(200, { notes: notes.map(note => ({...note, deleteBlockedReason: protectedDeletionReason(note.path)})), usageTracking, vaultName: path.basename(config.vault), vaultId: hash(config.vault), protection: 'rule-level', workspaceIcons, workspaceNames, workspaceGroups, projects: config.projects.map(({ id, name }) => ({ id, name: name || id, icon: workspaceIcons[id] || null, group: workspaceGroups[id] })) });
+        return json(200, { notes: notes.map(note => ({...note, deleteBlockedReason: protectedDeletionReason(note.path)})), usageTracking, vaultName: path.basename(config.vault), vaultId: hash(config.vault), protection: 'rule-level', workspaceIcons, workspaceIconNodes, workspaceNames, workspaceGroups, projects: config.projects.map(({ id, name }) => ({ id, name: name || id, icon: workspaceIcons[id] || null, group: workspaceGroups[id] })) });
       }
       if (url.pathname === '/api/workspace') return json(200, await workspaceDetail(config, url.searchParams.get('id')));
       if (url.pathname === '/api/workspace-icons') return json(200, await searchWorkspaceIcons(config, url.searchParams.get('q') || '', Number(url.searchParams.get('limit') || 24)));
+      if (url.pathname === '/api/workspace-icons/svg') {
+        const names = (url.searchParams.get('names') || '').split(',').map(s => s.trim()).filter(Boolean).slice(0, 64);
+        return send(200, 'application/json; charset=utf-8', JSON.stringify({ iconNodes: await getWorkspaceIconNodes(names) }), { 'Cache-Control': 'public, max-age=86400' });
+      }
       if (url.pathname === '/api/trash') return json(200, await listTrash(config));
       if (url.pathname === '/api/graph') return json(200, await buildWorkspaceGraph(config, url.searchParams.get('project'), renderMarkdown));
       if (url.pathname === '/api/review-diff') return json(200, await getReviewDiff(config, url.searchParams.get('path')));

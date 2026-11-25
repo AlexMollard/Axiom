@@ -1,21 +1,28 @@
+import * as fs from 'node:fs/promises';
 import {readNote} from './memory.mjs';
 
 export const WORKSPACE_ICONS_PATH = 'Agents/Workspace icons.md';
 
-// The dynamic import table maps aliases to the same canonical icon module. Inspecting
-// its lazy loader functions does not load React or any individual icon modules.
-let namesPromise;
+let catalogPromise;
+async function loadCatalog() {
+  catalogPromise ||= fs.readFile(new URL('./lucide-icons.json', import.meta.url), 'utf8').then(JSON.parse);
+  return catalogPromise;
+}
+
 async function canonicalNames() {
-  namesPromise ||= import('lucide-react/dynamicIconImports').then(({default: imports}) => {
-    const names = new Set();
-    for (const [name, load] of Object.entries(imports)) {
-      const target = String(load).match(/\/icons\/([^/'"]+)\.mjs/);
-      if (!target) throw new Error('Unable to identify canonical Lucide icon names.');
-      if (name === target[1]) names.add(name);
-    }
-    return names;
-  });
-  return namesPromise;
+  const catalog = await loadCatalog();
+  return new Set(Object.keys(catalog));
+}
+
+export async function getWorkspaceIconNodes(names) {
+  const catalog = await loadCatalog();
+  const nodes = Object.create(null);
+  for (const name of names || []) {
+    if (typeof name !== 'string' || !name) continue;
+    const node = catalog[name];
+    if (node) nodes[name] = node;
+  }
+  return nodes;
 }
 
 export async function validateWorkspaceIcons(assignments) {
@@ -55,7 +62,10 @@ export async function readWorkspaceIcons(config) {
 export async function searchWorkspaceIcons(config, query = '', limit = 24) {
   if (typeof query !== 'string' || !Number.isInteger(limit) || limit < 1 || limit > 1000) throw new Error('Icon search requires a text query and a limit between 1 and 1000.');
   const {assignments} = await readWorkspaceIcons(config);
+  const catalog = await loadCatalog();
   const used = new Set(Object.values(assignments));
-  const matches = [...await canonicalNames()].filter(name => !used.has(name) && name.includes(query.trim().toLowerCase())).sort();
-  return {assignments, candidates: matches.slice(0, limit), total: matches.length, limit};
+  const matches = Object.keys(catalog).filter(name => !used.has(name) && name.includes(query.trim().toLowerCase())).sort();
+  const candidates = matches.slice(0, limit);
+  const iconNodes = Object.fromEntries(candidates.map(name => [name, catalog[name]]));
+  return {assignments, candidates, iconNodes, total: matches.length, limit};
 }

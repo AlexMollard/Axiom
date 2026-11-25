@@ -1,5 +1,6 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { apiMutate, focusMainRoute, hideQuickOverlay, listenDesktop } from './desktop-bridge.mjs';
+import { registerWorkspaceIconNodes } from './WorkspaceIcon.jsx';
 import './DesktopChrome.css';
 
 const actions = [
@@ -42,7 +43,11 @@ export default function QuickOverlay() {
   const loadCatalog = async () => {
     try {
       const resp = await fetch('/api/catalog', { cache: 'no-store' });
-      if (resp.ok) setCatalog(await resp.json());
+      if (resp.ok) {
+        const nextCatalog = await resp.json();
+        registerWorkspaceIconNodes(nextCatalog.workspaceIconNodes);
+        setCatalog(nextCatalog);
+      }
     } catch {}
   };
 

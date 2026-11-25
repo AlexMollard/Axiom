@@ -1,5 +1,5 @@
 import React, { useEffect, useRef, useState } from 'react';
-import WorkspaceIcon from './WorkspaceIcon.jsx';
+import WorkspaceIcon, { registerWorkspaceIconNodes } from './WorkspaceIcon.jsx';
 
 async function get(url) {
   const response = await fetch(url);
@@ -33,7 +33,20 @@ export function WorkspaceSettings({ id, onClose, onChanged, onDeleted }) {
   const [detail, setDetail] = useState(null), [name, setName] = useState(''), [icon, setIcon] = useState(''), [group, setGroup] = useState('work');
   const [query, setQuery] = useState(''), [icons, setIcons] = useState([]), [total, setTotal] = useState(0), [error, setError] = useState(''), [busy, setBusy] = useState(false), [confirm, setConfirm] = useState(false), [typed, setTyped] = useState('');
   useEffect(() => { let active = true; get('/api/workspace?id=' + encodeURIComponent(id)).then(d => { if (active) { setDetail(d); setName(d.name); setIcon(d.icon || ''); setGroup(d.group); } }).catch(e => { if (active) setError(e.message); }); return () => { active = false; }; }, [id]);
-  useEffect(() => { let active = true; get('/api/workspace-icons?q=' + encodeURIComponent(query) + '&limit=24').then(d => { if (active) { setIcons(d.candidates); setTotal(d.total); } }).catch(e => { if (active) setError(e.message); }); return () => { active = false; }; }, [query]);
+  useEffect(() => {
+    let active = true;
+    const handle = setTimeout(() => {
+      get('/api/workspace-icons?q=' + encodeURIComponent(query) + '&limit=24')
+        .then(d => {
+          if (!active) return;
+          registerWorkspaceIconNodes(d.iconNodes);
+          setIcons(d.candidates);
+          setTotal(d.total);
+        })
+        .catch(e => { if (active) setError(e.message); });
+    }, query ? 120 : 0);
+    return () => { active = false; clearTimeout(handle); };
+  }, [query]);
   async function save(e) {
     e.preventDefault(); setBusy(true); setError('');
     try { await mutate('/api/workspace', 'PUT', { id, name, icon, group, expectedRevision: detail.revision }); onChanged(); }
