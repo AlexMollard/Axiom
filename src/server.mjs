@@ -221,7 +221,7 @@ export function createServer(config, configId = null) {
             const fresh = config.configPath ? await loadConfig(config.configPath) : config;
             if (fresh.vault !== config.vault || fresh.backupDir !== config.backupDir) return json(409, {error: 'Vault configuration changed. Restart and rescan before deciding.'});
             const candidate = (await catalog(fresh)).find(note => note.path === body.path);
-            const workspace = candidate && (candidate.project === 'global' || fresh.projects.some(project => project.id === candidate.project) ? candidate.project : '__unmapped');
+            const workspace = candidate && (candidate.project === 'global' || candidate.project === 'personal' || fresh.projects.some(project => project.id === candidate.project) ? candidate.project : '__unmapped');
             if (!candidate) return json(409, {error: 'This note is no longer a cleanup candidate. Rescan before deciding.'});
             const scan = await getCleanup(fresh, workspace, renderMarkdown);
             const eligible = scan.items.some(item => !item.reviewOnly && item.notes.some(note => note.path === body.path && note.revision === body.expectedRevision && !note.cleanupBlockedReason));
@@ -269,11 +269,15 @@ export function createServer(config, configId = null) {
         await maybeReloadConfig(config);
         const { assignments: workspaceIcons } = await readWorkspaceIcons(config);
         const workspaceIconNodes = await getWorkspaceIconNodes(Object.values(workspaceIcons));
-        const workspaceNames = {global: config.workspaceNames?.global || 'General', __unmapped: config.workspaceNames?.__unmapped || 'Unmapped', ...Object.fromEntries(config.projects.map(({id, name}) => [id, name || id]))};
-        const workspaceGroups = Object.fromEntries(Object.keys(workspaceNames).map(id => [id, config.workspaceGroups?.[id] === 'home' ? 'home' : 'work']));
+        const workspaceNames = {global: config.workspaceNames?.global || 'General', personal: config.workspaceNames?.personal || 'Personal', __unmapped: config.workspaceNames?.__unmapped || 'Unmapped', ...Object.fromEntries(config.projects.map(({id, name}) => [id, name || id]))};
+        const workspaceGroups = Object.fromEntries(Object.keys(workspaceNames).map(id => [id, id === 'personal' ? 'personal' : config.workspaceGroups?.[id] === 'home' ? 'home' : 'work']));
         const notes = await catalog(config);
         const usageTracking = await inventoryUsage(config, notes);
-        return json(200, { notes: notes.map(note => ({...note, deleteBlockedReason: protectedDeletionReason(note.path)})), usageTracking, vaultName: path.basename(config.vault), vaultId: hash(config.vault), protection: 'rule-level', workspaceIcons, workspaceIconNodes, workspaceNames, workspaceGroups, projects: config.projects.map(({ id, name }) => ({ id, name: name || id, icon: workspaceIcons[id] || null, group: workspaceGroups[id] })) });
+        const projects = [
+          { id: 'personal', name: workspaceNames.personal, icon: workspaceIcons.personal || null, group: workspaceGroups.personal },
+          ...config.projects.filter(({ id }) => id !== 'personal').map(({ id, name }) => ({ id, name: name || id, icon: workspaceIcons[id] || null, group: workspaceGroups[id] })),
+        ];
+        return json(200, { notes: notes.map(note => ({...note, deleteBlockedReason: protectedDeletionReason(note.path)})), usageTracking, vaultName: path.basename(config.vault), vaultId: hash(config.vault), protection: 'rule-level', workspaceIcons, workspaceIconNodes, workspaceNames, workspaceGroups, projects });
       }
       if (url.pathname === '/api/workspace') { await maybeReloadConfig(config); return json(200, await workspaceDetail(config, url.searchParams.get('id'))); }
       if (url.pathname === '/api/workspace-icons') return json(200, await searchWorkspaceIcons(config, url.searchParams.get('q') || '', Number(url.searchParams.get('limit') || 24)));

@@ -156,7 +156,7 @@ export default function Notifications({ catalog, groups, pendingCount, onCatalog
     dialog.current.close();
   };
 
-  const workspace = note => groups.find(group => group.id === note.project)?.name || (note.project === 'global' ? 'General' : 'Unmapped notes');
+  const workspace = note => groups.find(group => group.id === note.project)?.name || (note.project === 'global' ? 'General' : note.project === 'personal' ? 'Personal' : 'Unmapped notes');
   const kind = note => note.reviewKind === 'changed' ? 'Changed since review' : state?.seen[note.path] ? 'Updated note' : 'New note';
 
   return (

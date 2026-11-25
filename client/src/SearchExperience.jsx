@@ -3,8 +3,9 @@ import { isDesktop } from './desktop-bridge.mjs';
 import './SearchExperience.css';
 
 const noteUrl = path => '/?note=' + encodeURIComponent(path);
-const label = (id, groups) => groups.find(group => group.id === id)?.name || (id === '__unmapped' ? 'Unmapped notes' : id || 'General');
-const scope = (note, groups) => note.project === 'global' || groups.some(group => group.id === note.project) ? note.project : '__unmapped';
+const label = (id, groups) => groups.find(group => group.id === id)?.name || (id === '__unmapped' ? 'Unmapped notes' : id === 'personal' ? 'Personal' : id || 'General');
+const scope = (note, groups) => ['global', 'personal'].includes(note.project) || groups.some(group => group.id === note.project) ? note.project : '__unmapped';
+const groupRank = group => (group?.id === 'personal' || group?.group === 'personal' ? 0 : group?.group === 'home' ? 2 : 1);
 
 function Highlight({ text = '', query }) {
   const words = [...new Set((query.toLowerCase().match(/[\p{L}\p{N}][\p{L}\p{N}+#]*/gu) || []))].filter(word => !['the','and','for','this','that','with','from','have','please','what','how','can','you'].includes(word)).sort((a, b) => b.length - a.length);
@@ -49,14 +50,14 @@ export function SearchResults({ query, groups, filters, onFiltersChange }) {
     for (const note of result?.items || []) { const id = scope(note, groups); if (!buckets.has(id)) buckets.set(id, []); buckets.get(id).push(note); }
     return [...buckets].sort(([a], [b]) => {
       const ga = groups.find(g => g.id === a), gb = groups.find(g => g.id === b);
-      return (ga?.group === 'home' ? 1 : 0) - (gb?.group === 'home' ? 1 : 0) || label(a, groups).localeCompare(label(b, groups));
+      return groupRank(ga) - groupRank(gb) || label(a, groups).localeCompare(label(b, groups));
     });
   }, [result, groups]);
   const change = (key, value) => onFiltersChange({ ...filters, [key]: value });
   return <section className="search-experience" aria-label="Search results">
     <div className="search-filters" aria-label="Search filters">
       <label>Scope<select value={searchScope} onChange={e => change('scope', e.target.value)}><option value="all">All notes</option><option value="active">Active knowledge</option></select></label>
-      <label>Workspace<select value={workspace} onChange={e => change('workspace', e.target.value)}><option value="">All workspaces</option>{[...groups].sort((a,b) => (a.group === 'home' ? 1 : 0) - (b.group === 'home' ? 1 : 0) || a.name.localeCompare(b.name)).map(group => <option key={group.id} value={group.id}>{group.name}</option>)}</select></label>
+      <label>Workspace<select value={workspace} onChange={e => change('workspace', e.target.value)}><option value="">All workspaces</option>{[...groups].sort((a,b) => groupRank(a) - groupRank(b) || a.name.localeCompare(b.name)).map(group => <option key={group.id} value={group.id}>{group.name}</option>)}</select></label>
       <label>Owner<select value={owner} onChange={e => change('owner', e.target.value)}><option value="">Everyone</option><option value="owner">Owner</option><option value="agent">Agent</option></select></label>
       <label>Review<select value={review} onChange={e => change('review', e.target.value)}><option value="">All review states</option><option value="reviewed">Reviewed</option><option value="unreviewed">Unreviewed</option></select></label>
       <label>Search mode<select value={mode} onChange={e => change('mode', e.target.value)}><option value="hybrid">Lexical + semantic</option><option value="lexical">Lexical only</option></select></label>
@@ -113,7 +114,7 @@ export function CommandPalette({ open, onClose, onNavigate, onOpenNewTab, onOpen
   const entries = useMemo(() => {
     const terms = query.trim().toLowerCase().split(/\s+/).filter(Boolean);
     const matches = value => terms.every(term => value.toLowerCase().includes(term));
-    const workspaces = [...groups].sort((a,b) => (a.group === 'home' ? 1 : 0) - (b.group === 'home' ? 1 : 0) || a.name.localeCompare(b.name));
+    const workspaces = [...groups].sort((a,b) => groupRank(a) - groupRank(b) || a.name.localeCompare(b.name));
     const recentState = recent?.vaultId === vaultId && recent.error ? recent : storedRecent;
     const byPath = new Map(notes.map(note => [note.path, note]));
     const recentEntries = !terms.length && recentState.vaultId === vaultId ? recentState.paths.map(path => byPath.get(path)).filter(Boolean).map(item => ({title: item.title, detail: item.path, path: item.path, kind: 'Recent', url: noteUrl(item.path)})) : [];

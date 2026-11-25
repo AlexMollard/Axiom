@@ -31,6 +31,7 @@ export default function QuickOverlay() {
   const [query, setQuery] = useState('');
   const [selected, setSelected] = useState(0);
   const [captureTarget, setCaptureTarget] = useState('new');
+  const [captureWorkspace, setCaptureWorkspace] = useState('global');
   const [appendPath, setAppendPath] = useState('Home.md');
   const [filename, setFilename] = useState('');
   const [body, setBody] = useState('');
@@ -88,8 +89,9 @@ export default function QuickOverlay() {
     const byPath = new Map(notes.map(n => [n.path, n]));
     const projects = catalog?.projects || [];
     const workspaces = [
+      { id: 'personal', name: catalog?.workspaceNames?.personal || 'Personal' },
       { id: 'global', name: catalog?.workspaceNames?.global || 'General' },
-      ...projects.filter(p => p.id !== 'global').map(p => ({ id: p.id, name: catalog?.workspaceNames?.[p.id] || p.name || p.id })),
+      ...projects.filter(p => p.id !== 'global' && p.id !== 'personal').map(p => ({ id: p.id, name: catalog?.workspaceNames?.[p.id] || p.name || p.id })),
     ];
 
     let recentEntries = [];
@@ -123,6 +125,15 @@ export default function QuickOverlay() {
     await hideQuickOverlay();
   };
 
+  const captureWorkspaces = useMemo(() => {
+    const projects = catalog?.projects || [];
+    return [
+      { id: 'personal', name: catalog?.workspaceNames?.personal || 'Personal' },
+      { id: 'global', name: catalog?.workspaceNames?.global || 'General' },
+      ...projects.filter(p => p.id !== 'global' && p.id !== 'personal').map(p => ({ id: p.id, name: catalog?.workspaceNames?.[p.id] || p.name || p.id })),
+    ];
+  }, [catalog]);
+
   const saveQuickNote = async () => {
     if (saving) return;
     setSaving(true);
@@ -132,7 +143,19 @@ export default function QuickOverlay() {
         const err = filenameError(filename);
         if (err) { setStatus(err); setSaving(false); return; }
         const path = `Owner/Notes/${filename.trim()}.md`;
-        const content = body.trim() ? body : `# ${filename.trim()}\n`;
+        const rawBody = body.trim() ? body : `# ${filename.trim()}\n`;
+        let content = rawBody;
+        if (captureWorkspace && captureWorkspace !== 'global') {
+          const normalized = rawBody.replace(/\r\n?/g, '\n');
+          const fmMatch = /^---\n([\s\S]*?)\n---(\n|$)/.exec(normalized);
+          if (fmMatch) {
+            const lines = fmMatch[1].split('\n').filter(line => !/^project:\s*/i.test(line));
+            lines.unshift(`project: ${captureWorkspace}`);
+            content = `---\n${lines.join('\n')}\n---\n${normalized.slice(fmMatch[0].length)}`;
+          } else {
+            content = `---\nproject: ${captureWorkspace}\n---\n${normalized}`;
+          }
+        }
         const result = await apiMutate('/api/note', {
           method: 'PUT',
           body: { path, content, expectedRevision: 'new' },
@@ -287,15 +310,20 @@ export default function QuickOverlay() {
               <button type="button" aria-pressed={captureTarget === 'append'} onClick={() => setCaptureTarget('append')}>Append to owner note</button>
             </div>
             {captureTarget === 'new' ? (
-              <input
-                ref={filenameInputRef}
-                autoFocus
-                aria-label="New note filename"
-                className="quick-overlay-input"
-                value={filename}
-                onChange={e => setFilename(e.target.value)}
-                placeholder="Note filename (saved in Owner/Notes/<name>.md)"
-              />
+              <>
+                <input
+                  ref={filenameInputRef}
+                  autoFocus
+                  aria-label="New note filename"
+                  className="quick-overlay-input"
+                  value={filename}
+                  onChange={e => setFilename(e.target.value)}
+                  placeholder="Note filename (saved in Owner/Notes/<name>.md)"
+                />
+                <select aria-label="Workspace for new note" className="quick-overlay-select" value={captureWorkspace} onChange={e => setCaptureWorkspace(e.target.value)}>
+                  {captureWorkspaces.map(ws => <option key={ws.id} value={ws.id}>{ws.name}</option>)}
+                </select>
+              </>
             ) : (
               <select aria-label="Target owner note to append" className="quick-overlay-select" value={appendPath} onChange={e => setAppendPath(e.target.value)}>
                 {ownerNotes.map(n => <option key={n.path} value={n.path}>{n.title} ({n.path})</option>)}

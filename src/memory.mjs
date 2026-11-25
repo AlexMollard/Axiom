@@ -266,13 +266,13 @@ export async function search(config, query, {cwd = process.cwd(), limit = 12, al
   const maximum = Math.max(0, Math.min(100, Math.floor(Number(limit) || 0)));
   const start = Math.max(0, Math.floor(Number(offset) || 0));
   const projects = new Set(config.projects.map(item => item.id));
-  const eligible = note => (all || ['global', project].includes(note.project)) &&
+  const eligible = note => (all || ['global', 'personal', project].includes(note.project)) &&
     (includeInactive || activeKnowledge(note)) &&
-    (!workspace || workspace === 'all' || (workspace === '__unmapped' ? note.project !== 'global' && !projects.has(note.project) : note.project === workspace)) &&
+    (!workspace || workspace === 'all' || (workspace === '__unmapped' ? !['global', 'personal'].includes(note.project) && !projects.has(note.project) : note.project === workspace)) &&
     (!owner || owner === 'all' || note.owner === owner) &&
     (!review || review === 'all' || note.reviewStatus === review);
   const {entries: allEntries, persistedSqlite, indexPath} = await indexedVault(config);
-  const entries = allEntries.filter(({note}) => all || ['global', project].includes(note.project));
+  const entries = allEntries.filter(({note}) => all || ['global', 'personal', project].includes(note.project));
   const reviews = await readReviews(config);
   const fts = persistedSqlite ? await queryVaultFts(config, indexPath, words, {all, project}) : null;
   const lexical = fts !== null ? fts : await rankEntries(entries, words, JSON.stringify([config.vault, all ? 'all' : project]));
@@ -658,7 +658,7 @@ async function saveMarkdown(config, relative, content, expectedRevision, {agent 
     const note = await prepareMarkdown(config, relative, content, expectedRevision);
     if (agent && relative.toLowerCase() !== WORKSPACE_ICONS_PATH.toLowerCase()) {
       const project = metadata(relative, content, {mtime: new Date()}).project;
-      const workspace = project === 'global' ? 'global' : config.projects.some(item => item.id === project) ? project : '__unmapped';
+      const workspace = project === 'global' || project === 'personal' ? project : config.projects.some(item => item.id === project) ? project : '__unmapped';
       const {assignments, revision} = await readWorkspaceIcons(config);
       const existing = Object.hasOwn(assignments, workspace) ? assignments[workspace] : undefined;
       if (existing && workspaceIcon !== undefined && workspaceIcon !== existing) throw new Error(`Workspace ${workspace} already has icon ${existing}; ordinary note writes cannot reassign it.`);

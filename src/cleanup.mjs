@@ -36,7 +36,7 @@ const references = value => {
 
 export async function getCleanup(config, workspace, renderMarkdown, {semantic = false, signal} = {}) {
   const configured = new Set(config.projects.map(project => project.id));
-  if (workspace !== null && workspace !== undefined && workspace !== 'global' && workspace !== '__unmapped' && !configured.has(workspace)) throw Object.assign(new Error('Unknown workspace.'), {status: 400});
+  if (workspace !== null && workspace !== undefined && workspace !== 'global' && workspace !== 'personal' && workspace !== '__unmapped' && !configured.has(workspace)) throw Object.assign(new Error('Unknown workspace.'), {status: 400});
   const scannedAt = new Date().toISOString();
   // Incoming links can cross workspace boundaries.
   const notes = await catalogWithContent(config);
@@ -65,7 +65,7 @@ export async function getCleanup(config, workspace, renderMarkdown, {semantic = 
     const reasons = usageByPath.get(note.path)?.protectionReasons || [];
     return reasons.length ? reasons.join('; ') : null;
   }
-  const selected = notes.filter(note => workspace == null || (workspace === '__unmapped' ? note.project !== 'global' && !configured.has(note.project) : note.project === workspace));
+  const selected = notes.filter(note => workspace == null || (workspace === '__unmapped' ? !['global', 'personal'].includes(note.project) && !configured.has(note.project) : note.project === workspace));
   const summaries = new Map(selected.map(note => { const {content, ...summary} = note; return [note.path, {...summary, cleanupBlockedReason: blocked(note)}]; }));
   const items = [], counts = {duplicate: 0, merge: 0, empty: 0, stale: 0};
   function add(category, reason, recommendation, group, details) {

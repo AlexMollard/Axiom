@@ -49,7 +49,7 @@ export function ReviewInbox({
     [notes],
   );
   const groupIds = useMemo(() => new Set(groups.map(g => g.id)), [groups]);
-  const scope = useCallback(note => (note.project === 'global' || groupIds.has(note.project) ? note.project : '__unmapped'), [groupIds]);
+  const scope = useCallback(note => (['global', 'personal'].includes(note.project) || groupIds.has(note.project) ? note.project : '__unmapped'), [groupIds]);
 
   const workspaceCounts = useMemo(() => {
     const counts = new Map();
@@ -80,15 +80,19 @@ export function ReviewInbox({
 
   const ids = useMemo(() => {
     const unique = [...new Set([...groups.map(g => g.id), ...(workspace === 'all' ? [] : [workspace])])];
-    const nameOf = id => groups.find(g => g.id === id)?.name || (id === 'global' ? 'General' : id);
+    const nameOf = id => groups.find(g => g.id === id)?.name || (id === 'global' ? 'General' : id === 'personal' ? 'Personal' : id);
+    const rankOf = id => {
+      const g = groups.find(item => item.id === id);
+      return g?.id === 'personal' || g?.group === 'personal' ? 0 : g?.group === 'home' ? 2 : 1;
+    };
     return unique.sort((a, b) => {
-      const homeDiff = Number(groups.find(g => g.id === a)?.group === 'home') - Number(groups.find(g => g.id === b)?.group === 'home');
+      const rankDiff = rankOf(a) - rankOf(b);
       const countDiff = (workspaceCounts.get(b) || 0) - (workspaceCounts.get(a) || 0);
-      return homeDiff || countDiff || nameOf(a).localeCompare(nameOf(b));
+      return rankDiff || countDiff || nameOf(a).localeCompare(nameOf(b));
     });
   }, [groups, workspace, workspaceCounts]);
 
-  const label = id => groups.find(g => g.id === id)?.name || (id === 'global' ? 'General' : id);
+  const label = id => groups.find(g => g.id === id)?.name || (id === 'global' ? 'General' : id === 'personal' ? 'Personal' : id);
 
   useEffect(() => {
     if (!visible.length) {

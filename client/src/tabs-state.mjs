@@ -19,7 +19,7 @@ export function routeTitle(route, notes = [], groups = []) {
   if (route.kind === 'project') {
     if (route.id === '__all') return 'All vaults graph';
     const g = groups.find(item => item.id === route.id);
-    return g?.name || (route.id === 'global' ? 'General' : route.id === '__unmapped' ? 'Unmapped' : route.id);
+    return g?.name || (route.id === 'global' ? 'General' : route.id === 'personal' ? 'Personal' : route.id === '__unmapped' ? 'Unmapped' : route.id);
   }
   const labels = {
     overview: 'Overview',

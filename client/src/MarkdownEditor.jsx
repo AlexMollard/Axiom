@@ -530,11 +530,12 @@ export default function MarkdownEditor({
 
   const locked = saving || reloading;
   const folderOptions = [
-    { value: 'Owner/Notes', label: 'Owner/Notes (Personal)' },
+    { value: 'Owner/Notes', label: 'Owner/Notes (Your notes)' },
     { value: 'Owner', label: 'Owner (Root)' },
+    { value: 'Agents/Memory/Projects/personal', label: 'Agents/Memory/Projects/personal (Personal)' },
     { value: 'Agents/Memory', label: 'Agents/Memory (General)' },
     ...groups
-      .filter(g => g.id !== 'global' && g.id !== '__unmapped')
+      .filter(g => g.id !== 'global' && g.id !== 'personal' && g.id !== '__unmapped')
       .map(g => ({ value: `Agents/Memory/Projects/${g.id}`, label: `Agents/Memory/Projects/${g.id}` })),
   ];
 
@@ -610,7 +611,12 @@ export default function MarkdownEditor({
           <div className="editor-frontmatter-grid">
             <label>
               Project
-              <input value={fm.fields.project} disabled={locked} placeholder="global" onChange={e => updateFrontmatter('project', e.target.value)} />
+              <input list="editor-project-options" value={fm.fields.project} disabled={locked} placeholder="global" onChange={e => updateFrontmatter('project', e.target.value)} />
+              <datalist id="editor-project-options">
+                <option value="personal">Personal</option>
+                <option value="global">General</option>
+                {groups.filter(g => g.id !== 'global' && g.id !== 'personal' && g.id !== '__unmapped').map(g => <option key={g.id} value={g.id}>{g.name}</option>)}
+              </datalist>
             </label>
             <label>
               Status

@@ -50,7 +50,7 @@ const WorkspaceSettings = lazy(() => import('./Management.jsx').then(m => ({ def
 const Trash = lazy(() => import('./Management.jsx').then(m => ({ default: m.Trash })));
 
 const labels = { all: 'All notes', owner: 'Your notes', agent: 'Agent memory', review: 'Review queue', proposals: 'Review queue', projects: 'Workspaces', trash: 'Trash', health: 'Memory health', cleanup: 'Clean up', harnesses: 'Harnesses', recovery: 'Backups & recovery', usage: 'Note usage' };
-const projectLabel = (id, groups = []) => groups.find(g => g.id === id)?.name || (id === '__all' ? 'All vaults' : id === '__unmapped' ? 'Unmapped notes' : id === 'global' ? 'General' : (id || 'General').replaceAll('-', ' ').replace(/^./, c => c.toUpperCase()));
+const projectLabel = (id, groups = []) => groups.find(g => g.id === id)?.name || (id === '__all' ? 'All vaults' : id === '__unmapped' ? 'Unmapped notes' : id === 'global' ? 'General' : id === 'personal' ? 'Personal' : (id || 'General').replaceAll('-', ' ').replace(/^./, c => c.toUpperCase()));
 const pendingReview = note => note.owner === 'agent' && note.reviewStatus === 'unreviewed' && !['archived', 'superseded'].includes((note.status || '').toLowerCase());
 const reviewLabel = note => note.owner === 'owner' ? 'Owner' : note.reviewStatus === 'reviewed' ? 'Reviewed' : 'Unreviewed';
 const proposal = note => note.path.startsWith('Agents/Proposals/');
@@ -148,7 +148,7 @@ function Reader({
     return notes.filter(n => n.path !== note.path && (n.links || []).some(link => resolveNote(link, n.path, notes)?.path === note.path));
   }, [notes, note.path]);
 
-  const scope = note.project !== 'global' && !groups.some(g => g.id === note.project) ? '__unmapped' : note.project;
+  const scope = !['global', 'personal'].includes(note.project) && !groups.some(g => g.id === note.project) ? '__unmapped' : note.project;
 
   return (
     <>
@@ -601,17 +601,22 @@ function MainApp({ detached = false }) {
   const projects = useMemo(() => catalog?.projects || [], [catalog?.projects]);
   const vault = catalog?.vaultName || 'Shared Brain';
   const workspaceIcons = useMemo(() => catalog?.workspaceIcons || {}, [catalog?.workspaceIcons]);
-  const unmapped = useCallback(n => n.project !== 'global' && !projects.some(p => p.id === n.project), [projects]);
+  const unmapped = useCallback(n => n.project !== 'global' && n.project !== 'personal' && !projects.some(p => p.id === n.project), [projects]);
 
   const groups = useMemo(() => {
     const names = catalog?.workspaceNames || {}, workspaceGroups = catalog?.workspaceGroups || {};
+    const personalProject = projects.find(p => p.id === 'personal');
     const list = [
+      { id: 'personal', name: names.personal || personalProject?.name || 'Personal', icon: workspaceIcons.personal ?? personalProject?.icon, group: 'personal', notes: notes.filter(n => n.project === 'personal') },
       { id: 'global', name: names.global || projects.find(p => p.id === 'global')?.name || 'General', icon: workspaceIcons.global, group: workspaceGroups.global || 'work', notes: notes.filter(n => n.project === 'global') },
-      ...projects.filter(p => p.id !== 'global').map(p => ({ id: p.id, name: names[p.id] || p.name, icon: workspaceIcons[p.id] ?? p.icon, group: workspaceGroups[p.id] || p.group || 'work', notes: notes.filter(n => n.project === p.id) })),
+      ...projects.filter(p => p.id !== 'global' && p.id !== 'personal').map(p => ({ id: p.id, name: names[p.id] || p.name, icon: workspaceIcons[p.id] ?? p.icon, group: workspaceGroups[p.id] || p.group || 'work', notes: notes.filter(n => n.project === p.id) })),
     ];
     const loose = notes.filter(unmapped);
     if (loose.length) list.push({ id: '__unmapped', name: names.__unmapped || 'Unmapped notes', icon: workspaceIcons.__unmapped, group: workspaceGroups.__unmapped || 'work', notes: loose });
-    list.sort((a, b) => Number(a.group === 'home') - Number(b.group === 'home'));
+    list.sort((a, b) => {
+      const rank = g => (g.id === 'personal' || g.group === 'personal' ? 0 : g.group === 'home' ? 2 : 1);
+      return rank(a) - rank(b);
+    });
     return list;
   }, [catalog, notes, projects, workspaceIcons, unmapped]);
 
@@ -974,7 +979,23 @@ function MainApp({ detached = false }) {
   else if (route.kind === 'usage') content = <Suspense fallback={<div className="boot">Loading usage…</div>}><UsagePage groups={groups} /></Suspense>;
   else if (route.kind === 'harnesses') content = <Suspense fallback={<div className="boot">Loading harnesses…</div>}><HarnessPage /></Suspense>;
   else if (route.kind === 'recovery') content = <Suspense fallback={<div className="boot">Loading recovery…</div>}><RecoveryPage /></Suspense>;
-  else if (route.kind === 'projects') content = <><div className="page-heading"><div><p className="eyebrow">Library</p><h1>Workspaces</h1><p className="page-description">Explore notes and their connections by workspace.</p></div><a className="button button-soft" href="/?project=__all&mode=graph"><Network size={17} aria-hidden="true" /> Full-vault graph</a></div>{['work', 'home'].map(folder => <section className="workspace-card-group" key={folder}><h2>{folder === 'home' ? 'Home' : 'Work'}</h2><div className="project-grid project-grid-full">{groups.filter(g => g.group === folder).map(g => <ProjectCard key={g.id} group={g} />)}</div></section>)}</>;
+  else if (route.kind === 'projects') content = (
+    <>
+      <div className="page-heading"><div><p className="eyebrow">Library</p><h1>Workspaces</h1><p className="page-description">Explore notes and their connections by workspace.</p></div><a className="button button-soft" href="/?project=__all&mode=graph"><Network size={17} aria-hidden="true" /> Full-vault graph</a></div>
+      {groups.some(g => g.id === 'personal' || g.group === 'personal') && (
+        <section className="workspace-card-group" key="personal">
+          <h2>Personal</h2>
+          <div className="project-grid project-grid-full">{groups.filter(g => g.id === 'personal' || g.group === 'personal').map(g => <ProjectCard key={g.id} group={g} />)}</div>
+        </section>
+      )}
+      {['work', 'home'].map(folder => (
+        <section className="workspace-card-group" key={folder}>
+          <h2>{folder === 'home' ? 'Home' : 'Work'}</h2>
+          <div className="project-grid project-grid-full">{groups.filter(g => g.group === folder && g.id !== 'personal').map(g => <ProjectCard key={g.id} group={g} />)}</div>
+        </section>
+      ))}
+    </>
+  );
   else if (route.kind === 'project') {
     const isAll = route.id === '__all';
     content = (
@@ -1007,7 +1028,7 @@ function MainApp({ detached = false }) {
 
   const desktopShell = !detached && isDesktop();
   const activeNoteScope = data?.note
-    ? (data.note.project !== 'global' && !groups.some(g => g.id === data.note.project) ? '__unmapped' : data.note.project)
+    ? (!['global', 'personal'].includes(data.note.project) && !groups.some(g => g.id === data.note.project) ? '__unmapped' : data.note.project)
     : null;
   const topbarLabel = route.kind === 'project'
     ? <><WorkspaceIcon name={workspaceIcons[route.id] ?? projects.find(p => p.id === route.id)?.icon} />{projectLabel(route.id, groups)}</>
@@ -1058,7 +1079,7 @@ function MainApp({ detached = false }) {
             <nav className="main-nav" aria-label="Library">{nav.map(([kind, label, Icon]) => <a key={kind} className={route.kind === kind || (kind === 'review' && route.kind === 'proposals') ? 'active' : ''} aria-current={route.kind === kind || (kind === 'review' && route.kind === 'proposals') ? 'page' : undefined} href={routeUrl({ kind })}><Icon className="nav-icon" size={18} strokeWidth={1.7} aria-hidden="true" />{label}{!['overview', 'projects', 'trash', 'cleanup'].includes(kind) && <span className="nav-count">{kind === 'all' ? notes.length : kind === 'review' ? pending.length : notes.filter(n => n.owner === kind).length}</span>}</a>)}</nav>
             <nav className="utility-nav" aria-label="Knowledge tools">{[['health', 'Health', Activity], ['usage', 'Usage', List], ['harnesses', 'Harnesses', Plug], ['recovery', 'Backups', DatabaseBackup]].map(([kind, label, Icon]) => <a key={kind} href={routeUrl({ kind })} aria-current={route.kind === kind ? 'page' : undefined}><Icon size={16} aria-hidden="true" />{label}</a>)}</nav>
             <div className="sidebar-section"><span>WORKSPACES</span><a href="/?project=__all&mode=graph">Graph <Network size={14} aria-hidden="true" /></a></div>
-            <nav className="project-nav" aria-label="Workspaces">{['work', 'home'].map(folder => <div key={folder}><button className="workspace-folder" type="button" aria-expanded={!collapsed[folder]} onClick={() => { const next = { ...collapsed, [folder]: !collapsed[folder] }; setCollapsed(next); try { localStorage.setItem('axiom-workspace-folders', JSON.stringify(next)); } catch {} }}><ChevronRight size={16} className={collapsed[folder] ? '' : 'expanded'} aria-hidden="true" />{folder === 'home' ? 'Home' : 'Work'}</button>{!collapsed[folder] && groups.filter(g => g.group === folder).map(g => <a key={g.id} className={route.kind === 'project' && route.id === g.id ? 'active' : ''} aria-current={route.kind === 'project' && route.id === g.id ? 'page' : undefined} href={routeUrl({ kind: 'project', id: g.id })}><WorkspaceIcon name={g.icon} />{projectLabel(g.id, groups)}<span className="nav-count">{g.notes.length}</span></a>)}</div>)}</nav>
+            <nav className="project-nav" aria-label="Workspaces">{groups.filter(g => g.id === 'personal' || g.group === 'personal').map(g => <a key={g.id} className={route.kind === 'project' && route.id === g.id ? 'active' : ''} aria-current={route.kind === 'project' && route.id === g.id ? 'page' : undefined} href={routeUrl({ kind: 'project', id: g.id })}><WorkspaceIcon name={g.icon} />{projectLabel(g.id, groups)}<span className="nav-count">{g.notes.length}</span></a>)}{['work', 'home'].map(folder => <div key={folder}><button className="workspace-folder" type="button" aria-expanded={!collapsed[folder]} onClick={() => { const next = { ...collapsed, [folder]: !collapsed[folder] }; setCollapsed(next); try { localStorage.setItem('axiom-workspace-folders', JSON.stringify(next)); } catch {} }}><ChevronRight size={16} className={collapsed[folder] ? '' : 'expanded'} aria-hidden="true" />{folder === 'home' ? 'Home' : 'Work'}</button>{!collapsed[folder] && groups.filter(g => g.group === folder && g.id !== 'personal').map(g => <a key={g.id} className={route.kind === 'project' && route.id === g.id ? 'active' : ''} aria-current={route.kind === 'project' && route.id === g.id ? 'page' : undefined} href={routeUrl({ kind: 'project', id: g.id })}><WorkspaceIcon name={g.icon} />{projectLabel(g.id, groups)}<span className="nav-count">{g.notes.length}</span></a>)}</div>)}</nav>
             <div className="sidebar-bottom"><a className="guard-note" href={noteUrl('Owner/Policies.md')}><ShieldCheck size={18} strokeWidth={1.7} aria-hidden="true" /><span>Owner notes stay yours<small>Rule-level safeguards, not isolation</small></span></a><div className="connection"><span className={`connection-dot connection-dot-${dotTone}`} />{error ? 'Vault unavailable' : catalog ? (sseStatus === 'connected' ? 'Vault live' : 'Reconnecting') : 'Connecting to vault'}</div></div>
           </aside>
         </>
@@ -1263,7 +1284,8 @@ function Library({ collection, visible, setVisible, search = false }) {
 function Overview({ notes, groups, data, activity, setActivity }) {
   const pinned = pinsFrom(data?.html);
   const [workspaceFolder, setWorkspaceFolder] = useState('work');
-  const folderWorkspaces = groups.filter(group => group.group === workspaceFolder).sort((a, b) => b.notes.length - a.notes.length).slice(0, workspaceFolder === 'work' ? 4 : 5);
+  const personalWorkspaces = groups.filter(group => group.id === 'personal' || group.group === 'personal');
+  const folderWorkspaces = groups.filter(group => group.group === workspaceFolder && group.id !== 'personal').sort((a, b) => b.notes.length - a.notes.length).slice(0, workspaceFolder === 'work' ? 4 : 5);
   const activityNotes = latest(notes.filter(n => !proposal(n) && !n.path.startsWith('Agents/Handovers/') && (activity === 'all' || n.owner === activity))).slice(0, 6);
   return <>
     <div className="page-heading"><div><p className="eyebrow">Your knowledge, together</p><h1>Overview</h1><p className="page-description">Notes, decisions, and context across your vault.</p></div><div className="heading-actions"><span className="page-date">{new Date().toLocaleDateString(undefined, { weekday: 'long', month: 'short', day: 'numeric' })}</span><a className="button" href={routeUrl({ kind: 'cleanup' })}><ScanSearch size={17} aria-hidden="true" />Clean up</a></div></div>
@@ -1273,7 +1295,8 @@ function Overview({ notes, groups, data, activity, setActivity }) {
       <Panel title="Pinned" className="panel-pinned" action={<a href={noteUrl('Home.md')}>Home note <ArrowUpRight size={18} strokeWidth={1.7} aria-hidden="true" /></a>}><div className="pinned-list">{pinned.length ? pinned.map((p, i) => <a className="pin-link" href={p.href} key={i}><FileText size={18} strokeWidth={1.7} aria-hidden="true" />{p.title}<ArrowUpRight size={18} strokeWidth={1.7} aria-hidden="true" /></a>) : <Empty>Add links under Pinned in Home.md.</Empty>}</div></Panel>
       <Panel title="Review queue" className="panel-review" action={<a href="/?view=review">View queue <ArrowRight size={18} strokeWidth={1.7} aria-hidden="true" /></a>}>{notes.some(pendingReview) ? latest(notes.filter(pendingReview)).slice(0, 2).map(n => <NoteRow key={n.path} note={n} />) : <Empty>You’re caught up. No active unreviewed agent notes.</Empty>}</Panel>
       <Panel title="Your workspaces" className="panel-projects" action={<a href="/?view=projects">All workspaces <ArrowRight size={18} strokeWidth={1.7} aria-hidden="true" /></a>}>
-        <div className="workspace-folder-tabs" role="group" aria-label="Workspace folder">{['work', 'home'].map(folder => <button key={folder} type="button" aria-pressed={workspaceFolder === folder} onClick={() => setWorkspaceFolder(folder)}>{folder === 'home' ? 'Home' : 'Work'}<span>{groups.filter(group => group.group === folder).length}</span></button>)}</div>
+        {personalWorkspaces.length > 0 && <div className="project-grid">{personalWorkspaces.map(group => <ProjectCard key={group.id} group={group} />)}</div>}
+        <div className="workspace-folder-tabs" role="group" aria-label="Workspace folder">{['work', 'home'].map(folder => <button key={folder} type="button" aria-pressed={workspaceFolder === folder} onClick={() => setWorkspaceFolder(folder)}>{folder === 'home' ? 'Home' : 'Work'}<span>{groups.filter(group => group.group === folder && group.id !== 'personal').length}</span></button>)}</div>
         <div className="project-grid">{folderWorkspaces.map(group => <ProjectCard key={group.id} group={group} />)}</div>
         {!folderWorkspaces.length && <Empty>No workspaces in this folder.</Empty>}
       </Panel>

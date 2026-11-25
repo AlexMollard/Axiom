@@ -20,6 +20,7 @@ const workspacePalette = [
 
 function workspaceColor(id) {
   if (!id || id === 'global') return '#d39476';
+  if (id === 'personal') return '#89a79d';
   if (id === '__unmapped') return '#9d8f85';
   let hash = 0;
   for (let i = 0; i < id.length; i++) hash = (hash * 31 + id.charCodeAt(i)) >>> 0;
@@ -86,7 +87,7 @@ export default function WorkspaceGraph({ project, label, groups = [], onOpenNote
   highlightUnreviewedRef.current = highlightUnreviewed;
 
   const groupNames = useMemo(() => {
-    const map = new Map([['global', 'General'], ['__unmapped', 'Unmapped']]);
+    const map = new Map([['personal', 'Personal'], ['global', 'General'], ['__unmapped', 'Unmapped']]);
     for (const g of groups) {
       if (g?.id) map.set(g.id, g.name || g.id);
     }

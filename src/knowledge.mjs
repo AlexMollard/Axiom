@@ -4,8 +4,8 @@ import {resolveNote} from './note-links.mjs';
 const recent = (a, b) => b.updated.localeCompare(a.updated) || a.path.localeCompare(b.path);
 function workspaceNotes(config, id, notes) {
   const ids = new Set(config.projects.map(project => project.id));
-  if (id !== 'global' && id !== '__unmapped' && !ids.has(id)) throw Object.assign(new Error('Unknown workspace.'), { status: 400 });
-  return notes.filter(note => id === '__unmapped' ? note.project !== 'global' && !ids.has(note.project) : note.project === id);
+  if (id !== 'global' && id !== 'personal' && id !== '__unmapped' && !ids.has(id)) throw Object.assign(new Error('Unknown workspace.'), { status: 400 });
+  return notes.filter(note => id === '__unmapped' ? !['global', 'personal'].includes(note.project) && !ids.has(note.project) : note.project === id);
 }
 function contentParts(content) {
   const front = content.match(/^---\r?\n([\s\S]*?)\r?\n---(?:\r?\n|$)/);
@@ -56,7 +56,7 @@ export async function getMemoryHealth(config, renderMarkdown) {
     const summary = allNotes[i];
     const { fields, body } = contentParts(note.content);
     const active = !['archived', 'superseded'].includes((note.status || '').toLowerCase());
-    if (active && note.project !== 'global' && !configured.has(note.project)) ambiguous.push(summary);
+    if (active && !['global', 'personal'].includes(note.project) && !configured.has(note.project)) ambiguous.push(summary);
     const graph = { targets: new Set(), unresolvedCount: 0, linksOnly: true };
     renderMarkdown(note.content, note.path, allNotes, graph);
     if (active && graph.unresolvedCount) brokenLinks.push({ note: summary, count: graph.unresolvedCount });
@@ -116,7 +116,11 @@ function references(value) {
 async function overlapCandidates(config, project, title, body, exclude) {
   const query = [title, body].join('\n').trim().slice(0, 4000);
   if (!query) return {notes: [], warnings: [], semantic: {enabled: Boolean(config.embeddings?.enabled), state: 'empty'}};
-  const scopes = project === 'global' || project === 'unmapped' ? ['global'] : [project, 'global'];
+  const scopes = project === 'global' || project === 'unmapped'
+    ? ['global', 'personal']
+    : project === 'personal'
+      ? ['personal', 'global']
+      : [project, 'global', 'personal'];
   const retrievalConfig = config.embeddings?.enabled
     ? {...config, embeddings: {...config.embeddings, minSimilarity: Math.max(0.5, config.embeddings.minSimilarity ?? 0.35)}}
     : config;
@@ -135,7 +139,7 @@ async function overlapCandidates(config, project, title, body, exclude) {
 
 export async function getNoteKnowledge(config, relative) {
   const current = await readNote(config, relative);
-  const all = (await catalog(config)).filter(note => note.project === current.project || note.project === 'global');
+  const all = (await catalog(config)).filter(note => note.project === current.project || note.project === 'global' || note.project === 'personal');
   const warnings = [];
   const edges = [], conflicts = [];
   for (const note of all) {
@@ -193,7 +197,7 @@ export async function getNoteKnowledge(config, relative) {
 export async function getCaptureSuggestions(config, { cwd = process.cwd(), workspace, path = '', content, limit = 5 } = {}) {
   if (typeof cwd !== 'string' || typeof path !== 'string' || typeof content !== 'string' || Buffer.byteLength(content) > 2 * 1024 * 1024) throw Object.assign(new Error('Supply a working directory, path and Markdown content no larger than 2 MiB.'), { status: 400 });
   if (!Number.isSafeInteger(limit) || limit < 1 || limit > 20) throw Object.assign(new Error('Limit must be an integer from 1 to 20.'), { status: 400 });
-  if (workspace !== undefined && (typeof workspace !== 'string' || !['global', 'unmapped', ...config.projects.map(project => project.id)].includes(workspace))) throw Object.assign(new Error('Unknown capture workspace.'), {status: 400});
+  if (workspace !== undefined && (typeof workspace !== 'string' || !['global', 'personal', 'unmapped', ...config.projects.map(project => project.id)].includes(workspace))) throw Object.assign(new Error('Unknown capture workspace.'), {status: 400});
   const project = workspace ?? projectFor(config, cwd);
   const { fields, body } = contentParts(content);
   const title = fields.title || body.match(/^#\s+(.+)$/m)?.[1] || path.split('/').pop()?.replace(/\.md$/i, '') || '';

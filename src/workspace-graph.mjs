@@ -3,18 +3,18 @@ import { catalogWithContent } from './memory.mjs';
 export async function buildWorkspaceGraph(config, project, renderMarkdown) {
   const configured = new Set(config.projects.map(({ id }) => id));
   const fullVault = project === '__all';
-  if (!project || (!fullVault && project !== 'global' && project !== '__unmapped' && !configured.has(project))) {
+  if (!project || (!fullVault && project !== 'global' && project !== 'personal' && project !== '__unmapped' && !configured.has(project))) {
     const error = new Error('Unknown workspace.'); error.status = 400; throw error;
   }
   const fullNotes = await catalogWithContent(config);
   const notes = fullNotes.map(({ content, ...note }) => note);
-  const resolveWorkspaceId = note => note.project === 'global' || configured.has(note.project) ? note.project : '__unmapped';
+  const resolveWorkspaceId = note => note.project === 'global' || note.project === 'personal' || configured.has(note.project) ? note.project : '__unmapped';
   const selectedIndexes = [];
   fullNotes.forEach((note, index) => {
     const match = fullVault
       ? true
       : project === '__unmapped'
-        ? note.project !== 'global' && !configured.has(note.project)
+        ? !['global', 'personal'].includes(note.project) && !configured.has(note.project)
         : note.project === project;
     if (match) selectedIndexes.push(index);
   });

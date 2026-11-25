@@ -45,19 +45,24 @@ export async function configureEmbeddings(config, settings, expectedRevision) {
 }
 function selectNotes(config, id, notes) {
   const ids = new Set(config.projects.map(project => project.id));
-  return notes.filter(note => id === '__unmapped' ? note.project !== 'global' && !ids.has(note.project) : note.project === id);
+  return notes.filter(note => id === '__unmapped' ? !['global', 'personal'].includes(note.project) && !ids.has(note.project) : note.project === id);
 }
 async function detail(config, id) {
   const project = config.projects.find(item => item.id === id);
-  if (!project && id !== 'global' && id !== '__unmapped') throw new Error('Unknown workspace.');
+  if (!project && id !== 'global' && id !== 'personal' && id !== '__unmapped') throw new Error('Unknown workspace.');
   const notes = selectNotes(config, id, await catalog(config));
   const {assignments} = await readWorkspaceIcons(config);
-  const name = project?.name || (Object.hasOwn(config.workspaceNames || {}, id) ? config.workspaceNames[id] : null) || (id === 'global' ? 'General' : id === '__unmapped' ? 'Unmapped notes' : id);
-  const group = config.workspaceGroups?.[id] === 'home' ? 'home' : 'work';
+  const name = project?.name || (Object.hasOwn(config.workspaceNames || {}, id) ? config.workspaceNames[id] : null) || (id === 'global' ? 'General' : id === 'personal' ? 'Personal' : id === '__unmapped' ? 'Unmapped notes' : id);
+  const group = id === 'personal' ? 'personal' : config.workspaceGroups?.[id] === 'home' ? 'home' : 'work';
   const icon = Object.hasOwn(assignments, id) ? assignments[id] : null;
   const pins = Array.isArray(config.workspacePins?.[id]) ? config.workspacePins[id] : [];
   const revision = hash(JSON.stringify({project: project || null, name, group, icon, pins, notes: notes.map(note => [note.path, note.revision]).sort((a,b) => a[0].localeCompare(b[0]))}));
-  return {id, name, group, icon, pins, revision, noteCount: notes.length, isSystem: !project, deleteBlockedReason: id === 'global' ? 'The general workspace cannot be deleted.' : notes.map(note => protectedDeletionReason(note.path)).find(Boolean) || null, ...(project ? {root: project.root, ...(project.additionalRoots ? {additionalRoots: project.additionalRoots} : {})} : {})};
+  const deleteBlockedReason = id === 'global'
+    ? 'The general workspace cannot be deleted.'
+    : id === 'personal'
+      ? 'The personal workspace cannot be deleted.'
+      : notes.map(note => protectedDeletionReason(note.path)).find(Boolean) || null;
+  return {id, name, group, icon, pins, revision, noteCount: notes.length, isSystem: !project || id === 'personal', deleteBlockedReason, ...(project ? {root: project.root, ...(project.additionalRoots ? {additionalRoots: project.additionalRoots} : {})} : {})};
 }
 export async function workspaceDetail(config, id) { await refresh(config); return detail(config, id); }
 async function writeIcons(config, assignments) {
@@ -66,8 +71,12 @@ async function writeIcons(config, assignments) {
   await commitMarkdown(config, await prepareMarkdown(config, WORKSPACE_ICONS_PATH, serializeWorkspaceIcons(assignments), revision));
 }
 export async function updateWorkspace(config, {id, name, icon, group, pins, expectedRevision}) {
-  if (typeof name !== 'string' || !name.trim() || name.trim().length > 120 || /[\r\n\0]/.test(name)) throw new Error('Workspace name must be 1–120 characters on one line.');
-  if (!['home', 'work'].includes(group)) throw new Error('Workspace group must be home or work.');
+  if (typeof name !== 'string' || !name.trim() || name.trim().length > 120 || /[\r\n\0]/.test(name)) throw new Error('Workspace name must be 1-120 characters on one line.');
+  if (id === 'personal') {
+    if (group !== undefined && !['personal', 'work', 'home'].includes(group)) throw new Error('Invalid workspace group.');
+  } else if (!['home', 'work'].includes(group)) {
+    throw new Error('Workspace group must be home or work.');
+  }
   if (icon !== null && (typeof icon !== 'string' || !icon)) throw new Error('Choose a canonical icon or null.');
   return locked(config, async () => {
     const {raw, revision} = await refresh(config), current = await detail(config, id);
@@ -85,7 +94,9 @@ export async function updateWorkspace(config, {id, name, icon, group, pins, expe
     const project = raw.projects?.find(item => item.id === id);
     if (project) project.name = name.trim(); else { raw.workspaceNames ||= {}; raw.workspaceNames[id] = name.trim(); }
     raw.workspaceGroups ||= {};
-    if (group === 'home') raw.workspaceGroups[id] = 'home'; else delete raw.workspaceGroups[id];
+    if (id === 'personal') delete raw.workspaceGroups[id];
+    else if (group === 'home') raw.workspaceGroups[id] = 'home';
+    else delete raw.workspaceGroups[id];
     const iconChanged = current.icon !== icon;
     if (iconChanged) await writeIcons(config, next);
     try { await saveConfig(config, raw, revision); } catch (error) { if (iconChanged) await writeIcons(config, assignments); throw error; }
@@ -183,7 +194,7 @@ async function readManifest(config, id) {
   }
   if (manifest.type === 'workspace') {
     const workspace = manifest.workspace, project = workspace?.project;
-    if (!workspace || workspace.id === 'global' || !/^(?:__unmapped|[a-z0-9][a-z0-9-]*)$/.test(workspace.id) || !['home', 'work'].includes(workspace.group) || (workspace.name !== undefined && typeof workspace.name !== 'string')) throw new Error('Invalid trash workspace record.');
+    if (!workspace || workspace.id === 'global' || workspace.id === 'personal' || !/^(?:__unmapped|[a-z0-9][a-z0-9-]*)$/.test(workspace.id) || !['home', 'work'].includes(workspace.group) || (workspace.name !== undefined && typeof workspace.name !== 'string')) throw new Error('Invalid trash workspace record.');
     if (project && (project.id !== workspace.id || !path.isAbsolute(project.root || '') || (project.additionalRoots !== undefined && (!Array.isArray(project.additionalRoots) || project.additionalRoots.some(root => typeof root !== 'string' || !path.isAbsolute(root)))))) throw new Error('Invalid trash workspace roots.');
     if (!project && workspace.id !== '__unmapped') throw new Error('Missing trash workspace mapping.');
   }
