@@ -4,6 +4,7 @@ import {randomUUID} from 'node:crypto';
 import {loadConfig, catalog, locked, safePath, readRawNote, prepareMarkdown, commitMarkdown, backupUnlocked, hash, crlf} from './memory.mjs';
 import {WORKSPACE_ICONS_PATH, readWorkspaceIcons, validateWorkspaceIcons, serializeWorkspaceIcons} from './workspace-icons.mjs';
 import {embeddingSettings} from './embeddings.mjs';
+import {sanitizeOptimizerSettings, validateOptimizerSettings} from './optimizer.mjs';
 
 const protectedPaths = new Set(['owner/policies.md', 'owner/preferences.md', 'owner/reviews.md', WORKSPACE_ICONS_PATH.toLowerCase()]);
 export const protectedDeletionReason = value => typeof value === 'string' && protectedPaths.has(value.toLowerCase()) ? 'This control note cannot be deleted.' : null;
@@ -41,6 +42,37 @@ export async function configureEmbeddings(config, settings, expectedRevision) {
     raw.embeddings = settings;
     await saveConfig(config, raw, revision);
     return config.embeddings;
+  });
+}
+export async function optimizerConfigState(config) {
+  const {revision} = await refresh(config);
+  return {settings: sanitizeOptimizerSettings(config), configRevision: revision};
+}
+export async function configureOptimizer(config, settings, expectedRevision) {
+  const validated = validateOptimizerSettings(settings);
+  return locked(config, async () => {
+    const {raw, revision} = await refresh(config);
+    if (revision !== expectedRevision) throw conflict('Configuration changed during optimizer setup; reload and retry.');
+    const existing = raw.optimizer && typeof raw.optimizer === 'object' ? raw.optimizer : {};
+    const next = {
+      provider: validated.provider,
+      model: validated.model,
+      apiBaseUrl: validated.apiBaseUrl,
+      deepRepoCheck: validated.deepRepoCheck,
+      maxNotesPerBatch: validated.maxNotesPerBatch,
+      timeoutMs: validated.timeoutMs,
+    };
+    if (settings?.clearApiKey === true) {
+      next.apiKey = '';
+    } else if (typeof settings?.apiKey === 'string' && settings.apiKey.trim()) {
+      next.apiKey = settings.apiKey.trim();
+    } else if (typeof existing.apiKey === 'string' && existing.apiKey.trim()) {
+      next.apiKey = existing.apiKey.trim();
+    }
+    raw.optimizer = next;
+    await saveConfig(config, raw, revision);
+    const after = await refresh(config);
+    return {settings: sanitizeOptimizerSettings(config), configRevision: after.revision};
   });
 }
 function selectNotes(config, id, notes) {

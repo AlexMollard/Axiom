@@ -5,6 +5,7 @@ import { decisionKey, readDecisions, writeDecisions, buildHandoff } from './clea
 import { apiMutate, isDesktop, readBucketState, revealInExplorer, saveFileNative, writeBucketState } from './desktop-bridge.mjs';
 import CleanupReview from './CleanupReview.jsx';
 import CleanupAnalysis from './CleanupAnalysis.jsx';
+import MemoryOptimizer from './MemoryOptimizer.jsx';
 import './Cleanup.css';
 
 const categories = [['all', 'All'], ['duplicate', 'Duplicates'], ['merge', 'Merge suggestions'], ['empty', 'Empty'], ['stale', 'Stale']];
@@ -31,6 +32,7 @@ function semanticSummary(status) {
 }
 
 export default function Cleanup({ groups, vaultId, onCatalogChanged, onOpenSplit }) {
+  const [mode, setMode] = useState('optimizer');
   const [workspace, setWorkspace] = useState('');
   const [category, setCategory] = useState('all');
   const [result, setResult] = useState(() => scanCache.get(`${vaultId || ''}:`) || null);
@@ -144,7 +146,16 @@ export default function Cleanup({ groups, vaultId, onCatalogChanged, onOpenSplit
   const counts = items.reduce((total, item) => { total[decisions[decisionKey(item)]?.decision || 'undecided']++; return total; }, { approved: 0, rejected: 0, undecided: 0 });
   const similarityIncomplete = result?.coverage?.mergeIncomplete || result?.semantic?.incomplete || ['unavailable', 'error'].includes(result?.semantic?.state) || Boolean(semanticError);
   return <section className="cleanup" aria-label="Clean up notes">
-    <div className="cleanup-heading"><div><p className="eyebrow">Library / Maintenance</p><h1>Clean up</h1><p className="page-description">Find candidates to inspect, without changing your notes.</p></div></div>
+    <div className="cleanup-heading">
+      <div><p className="eyebrow">Library / Maintenance</p><h1>Clean up</h1><p className="page-description">{mode === 'optimizer' ? 'Let a high-intelligence model tidy, consolidate, and remove stale agent memories.' : 'Find candidates to inspect, without changing your notes.'}</p></div>
+      <nav className="filter-links cleanup-mode-tabs" aria-label="Cleanup mode">
+        <button type="button" className={mode === 'optimizer' ? 'active' : ''} aria-pressed={mode === 'optimizer'} onClick={() => setMode('optimizer')}>AI Optimize</button>
+        <button type="button" className={mode === 'scan' ? 'active' : ''} aria-pressed={mode === 'scan'} onClick={() => setMode('scan')}>Heuristic Scan</button>
+      </nav>
+    </div>
+    {mode === 'optimizer' ? (
+      <MemoryOptimizer groups={groups} vaultId={vaultId} onCatalogChanged={onCatalogChanged} onOpenSplit={onOpenSplit} />
+    ) : <>
     <div className="cleanup-intro"><p>Inspect the evidence, approve or reject each suggestion, and add any instructions for the merge. Then copy one JSON handoff for your agent to reconcile the full sources.</p><p>Approval records a browser-local decision, not an edit or approval of the note contents. Owner notes remain human-only; their approved suggestions are exported as proposals, never permission for an agent to rewrite them.</p><p>Semantic comparison reuses cached vectors and may load the local model for missing content. Similarity identifies possible overlap, not agreement or merge safety. Nothing is merged or removed automatically.</p></div>
     <div className="cleanup-controls"><label>Workspace<select value={workspace} onChange={e => changeWorkspace(e.target.value)}><option value="">All workspaces</option>{groups.map(group => <option key={group.id} value={group.id}>{group.name}</option>)}{!groups.some(group => group.id === '__unmapped') && <option value="__unmapped">Unmapped notes</option>}</select></label><label className="cleanup-semantic-toggle"><input type="checkbox" checked={semantic} onChange={e => setSemantic(e.target.checked)} disabled={busy} />Include semantic comparison</label><button type="button" className="button button-primary" onClick={() => scan()} disabled={busy}><ScanSearch size={17} aria-hidden="true" />{busy ? 'Scanning…' : result ? 'Scan again' : 'Scan notes'}</button></div>
     {busy && <p role="status">{phase === 'semantic' ? 'Comparing semantic similarity… Lexical results remain available; no notes are being changed.' : 'Scanning notes… No notes are being changed.'}</p>}
@@ -206,5 +217,6 @@ export default function Cleanup({ groups, vaultId, onCatalogChanged, onOpenSplit
       });
       onCatalogChanged();
     }} />}
+    </>}
   </section>;
 }

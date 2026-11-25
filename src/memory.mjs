@@ -39,6 +39,9 @@ export async function loadConfig(configPath = process.env.SHARED_BRAIN_CONFIG ||
   config.indexPath = path.join(path.dirname(path.resolve(configPath)), '.state', `index-${hash(config.vault).slice(0, 16)}.sqlite`);
   config.configPath = path.resolve(configPath);
   embeddingSettings(config);
+  if (config.optimizer !== undefined && (typeof config.optimizer !== 'object' || config.optimizer === null || Array.isArray(config.optimizer))) {
+    throw new Error('Invalid optimizer configuration.');
+  }
   return config;
 }
 
@@ -818,9 +821,21 @@ async function main() {
     case 'knowledge': { const {getNoteKnowledge} = await import('./knowledge.mjs'); result = await getNoteKnowledge(config, flags.path); break; }
     case 'capture': { let content = ''; for await (const chunk of process.stdin) { content += chunk; if (Buffer.byteLength(content) > 2 * 1024 * 1024) throw new Error('Input exceeds 2 MiB.'); } const {getCaptureSuggestions} = await import('./knowledge.mjs'); result = await getCaptureSuggestions(config, {cwd: flags.cwd, path: flags.path, content}); break; }
     case 'workspace-icons': result=await searchWorkspaceIcons(config,flags.query || '',flags.limit === undefined ? 24 : Number(flags.limit)); break;
+    case 'optimizer-status': { const {getOptimizerStatus} = await import('./optimizer.mjs'); result = await getOptimizerStatus(config); break; }
+    case 'optimize': {
+      const {runMemoryOptimization} = await import('./optimizer.mjs');
+      result = await runMemoryOptimization(config, {
+        workspace: flags.workspace && flags.workspace !== 'all' ? flags.workspace : null,
+        provider: flags.provider || undefined,
+        model: flags.model || undefined,
+        deepRepoCheck: flags['deep-repo'] === undefined ? undefined : flags['deep-repo'] === 'true',
+        dryRun: flags['dry-run'] === 'true',
+      });
+      break;
+    }
     case 'backup': result=await backup(config); break;
     case 'restore': if(!flags.snapshot || !flags.target) throw new Error('restore requires --snapshot and --target.'); result=await restore(config,flags.snapshot,flags.target); break;
-    default: throw new Error('Commands: policy, catalog, search, read, write, knowledge, capture, embeddings, index-embeddings, workspace-icons, backup, restore.');
+    default: throw new Error('Commands: policy, catalog, search, read, write, knowledge, capture, embeddings, index-embeddings, workspace-icons, optimizer-status, optimize, backup, restore.');
   }
   console.log(JSON.stringify(result,null,2));
 }

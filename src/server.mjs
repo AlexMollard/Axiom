@@ -12,7 +12,8 @@ import sanitizeHtml from 'sanitize-html';
 import { catalog, readNote, search, loadConfig, backup, saveFromEditor, saveReviewFromEditor, saveReviewsBatchFromEditor, refreshEmbeddings, hash } from './memory.mjs';
 import { buildWorkspaceGraph } from './workspace-graph.mjs';
 import { readWorkspaceIcons, searchWorkspaceIcons, getWorkspaceIconNodes } from './workspace-icons.mjs';
-import { workspaceDetail, updateWorkspace, deleteNote, deleteWorkspace, listTrash, restoreTrash, protectedDeletionReason } from './management.mjs';
+import { workspaceDetail, updateWorkspace, configureOptimizer, optimizerConfigState, deleteNote, deleteWorkspace, listTrash, restoreTrash, protectedDeletionReason } from './management.mjs';
+import { createOptimizerManager, detectOptimizerProviders } from './optimizer.mjs';
 import {getReviewDiff} from './review-history.mjs';
 import {getWorkspaceOverview, getMemoryHealth, getNoteKnowledge, getCaptureSuggestions} from './knowledge.mjs';
 import {getHarnessStatus} from './harness-status.mjs';
@@ -140,6 +141,7 @@ async function maybeReloadConfig(config) {
       config.workspaceGroups = fresh.workspaceGroups;
       config.workspacePins = fresh.workspacePins;
       config.embeddings = fresh.embeddings;
+      config.optimizer = fresh.optimizer;
       config.backupRetention = fresh.backupRetention;
       config.configStamp = fresh.configStamp;
     }
@@ -162,6 +164,7 @@ async function readJson(req) {
 export function createServer(config, configId = null) {
   const csrf = randomBytes(32);
   const events = createEventHub(config);
+  const optimizer = createOptimizerManager(config, renderMarkdown);
   const allowedHosts = new Set([`127.0.0.1:${config.port}`, `localhost:${config.port}`]);
   const server = http.createServer(async (req, res) => {
     const send = (status, type, body, extra = {}) => {
@@ -189,12 +192,28 @@ export function createServer(config, configId = null) {
       const capturePreview = req.method === 'POST' && url.pathname === '/api/capture-suggestions';
       const semanticReindex = req.method === 'POST' && url.pathname === '/api/embeddings/reindex';
       const semanticCleanup = req.method === 'POST' && url.pathname === '/api/cleanup';
-      if (!read && !save && !preview && !review && !reviewBatch && !management && !recovery && !historyRestore && !capturePreview && !semanticReindex && !semanticCleanup) { res.setHeader('Allow', 'GET, HEAD, PUT, POST, DELETE'); return json(405, { error: 'Method not allowed' }); }
-      if (save || preview || review || reviewBatch || management || recovery || historyRestore || capturePreview || semanticReindex || semanticCleanup) {
+      const optimizerSettingsPut = req.method === 'PUT' && url.pathname === '/api/optimizer/settings';
+      const optimizerRun = req.method === 'POST' && url.pathname === '/api/optimizer/run';
+      const optimizerCancel = req.method === 'POST' && url.pathname === '/api/optimizer/cancel';
+      if (!read && !save && !preview && !review && !reviewBatch && !management && !recovery && !historyRestore && !capturePreview && !semanticReindex && !semanticCleanup && !optimizerSettingsPut && !optimizerRun && !optimizerCancel) { res.setHeader('Allow', 'GET, HEAD, PUT, POST, DELETE'); return json(405, { error: 'Method not allowed' }); }
+      if (save || preview || review || reviewBatch || management || recovery || historyRestore || capturePreview || semanticReindex || semanticCleanup || optimizerSettingsPut || optimizerRun || optimizerCancel) {
         if (req.headers.origin !== `http://${host.toLowerCase()}` || req.headers['sec-fetch-site'] === 'cross-site') return json(403, { error: 'Editor requests must originate from this site.' });
         const token = req.headers['x-shared-brain-csrf'];
         if (typeof token !== 'string' || !/^[a-f0-9]{64}$/.test(token) || !timingSafeEqual(Buffer.from(token, 'hex'), csrf)) return json(403, { error: 'Editor session is missing or expired. Reload the editor session; your draft has not been saved.' });
         const body = await readJson(req);
+        if (optimizerSettingsPut) {
+          await maybeReloadConfig(config);
+          const updated = await configureOptimizer(config, body, body.expectedRevision);
+          return json(200, { ...updated, providers: await detectOptimizerProviders(config) });
+        }
+        if (optimizerRun) {
+          await maybeReloadConfig(config);
+          const job = optimizer.startRun(body || {});
+          return json(202, { job });
+        }
+        if (optimizerCancel) {
+          return json(200, optimizer.cancelRun());
+        }
         if (semanticCleanup) {
           if (!body || typeof body !== 'object' || Array.isArray(body) || (body.workspace !== undefined && typeof body.workspace !== 'string')) return json(400, {error: 'Workspace must be a string.'});
           const controller = new AbortController();
@@ -294,6 +313,16 @@ export function createServer(config, configId = null) {
       if (url.pathname === '/api/workspace-overview') { await maybeReloadConfig(config); return json(200, await getWorkspaceOverview(config, url.searchParams.get('id'))); }
       if (url.pathname === '/api/memory-health') { await maybeReloadConfig(config); return json(200, await getMemoryHealth(config, renderMarkdown)); }
       if (url.pathname === '/api/cleanup') { await maybeReloadConfig(config); return json(200, await getCleanup(config, url.searchParams.get('workspace'), renderMarkdown)); }
+      if (url.pathname === '/api/optimizer/settings') {
+        await maybeReloadConfig(config);
+        const [{ settings, configRevision }, providers, state] = await Promise.all([
+          optimizerConfigState(config),
+          detectOptimizerProviders(config),
+          Promise.resolve(optimizer.getState()),
+        ]);
+        return json(200, { settings, configRevision, providers, ...state });
+      }
+      if (url.pathname === '/api/optimizer/status') { return json(200, optimizer.getState()); }
       if (url.pathname === '/api/embeddings') { await maybeReloadConfig(config); return json(200, await embeddingStatus(config)); }
       if (url.pathname === '/api/harnesses') return json(200, await getHarnessStatus(config));
       if (url.pathname === '/api/recovery') return json(200, await getRecoveryStatus(config));
@@ -336,7 +365,10 @@ export function createServer(config, configId = null) {
       allowedHosts.add(`localhost:${address.port}`);
     }
   });
-  const closeEvents = () => events.close();
+  const closeEvents = () => {
+    optimizer.cancelRun();
+    events.close();
+  };
   server.on('close', closeEvents);
   const originalClose = server.close.bind(server);
   server.close = callback => {
