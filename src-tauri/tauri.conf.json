@@ -6,7 +6,7 @@
   "build": {
     "beforeDevCommand": "npm run build",
     "beforeBuildCommand": "npm run build",
-    "frontendDist": "../dist"
+    "frontendDist": "fallback-dist"
   },
   "app": {
     "withGlobalTauri": true,

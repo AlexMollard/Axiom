@@ -5,7 +5,12 @@ param(
   [switch]$Install,
   [switch]$Publish,
   [string]$GitHubToken,
-  [string]$OutputDir = 'Releases'
+  [string]$OutputDir = 'Releases',
+  [string]$ReleaseNotes,
+  [string]$Channel,
+  [switch]$PreRelease,
+  [switch]$NoPortable,
+  [switch]$NoDelta
 )
 $ErrorActionPreference = 'Stop'
 
@@ -19,9 +24,25 @@ if ($cargoToml -notmatch "(?m)^version\s*=\s*""$([regex]::Escape($version))""") 
   throw "package.json version ($version) does not match src-tauri/Cargo.toml version."
 }
 
+$tauriConf = Get-Content -LiteralPath (Join-Path $root 'src-tauri\tauri.conf.json') -Raw | ConvertFrom-Json
+if ([string]$tauriConf.version -cne $version) {
+  throw "package.json version ($version) does not match src-tauri/tauri.conf.json version ($($tauriConf.version))."
+}
+
 $npm = (Get-Command npm.cmd -ErrorAction SilentlyContinue | Select-Object -First 1 -ExpandProperty Source)
 if (-not $npm) { $npm = (Get-Command npm -ErrorAction Stop).Source }
 $vpk = (Get-Command vpk -ErrorAction Stop).Source
+
+$token = $GitHubToken
+if (-not $token) { $token = $env:AXIOM_GITHUB_TOKEN }
+if (-not $token) { $token = $env:GITHUB_TOKEN }
+if (-not $token) { $token = $env:GH_TOKEN }
+if (-not $token) {
+  $gh = Get-Command gh -ErrorAction SilentlyContinue | Select-Object -First 1 -ExpandProperty Source
+  if ($gh) {
+    $token = (& $gh auth token 2>$null | Out-String).Trim()
+  }
+}
 
 Push-Location $root
 try {
@@ -55,28 +76,60 @@ try {
   Copy-Item -LiteralPath (Join-Path $root 'package-lock.json') -Destination (Join-Path $stageDir 'package-lock.json') -Force
   Copy-Item -LiteralPath (Join-Path $root 'src') -Destination (Join-Path $stageDir 'src') -Recurse -Force
   Copy-Item -LiteralPath $distPath -Destination (Join-Path $stageDir 'dist') -Recurse -Force
-  Copy-Item -LiteralPath (Join-Path $root 'scripts') -Destination (Join-Path $stageDir 'scripts') -Recurse -Force
   Copy-Item -LiteralPath (Join-Path $root 'integrations') -Destination (Join-Path $stageDir 'integrations') -Recurse -Force
+
+  $stageScripts = Join-Path $stageDir 'scripts'
+  New-Item -ItemType Directory -Path $stageScripts -Force | Out-Null
+  foreach ($scriptName in @('start.ps1', 'setup-embeddings.mjs')) {
+    $srcScript = Join-Path $root "scripts\$scriptName"
+    if (Test-Path -LiteralPath $srcScript -PathType Leaf) {
+      Copy-Item -LiteralPath $srcScript -Destination (Join-Path $stageScripts $scriptName) -Force
+    }
+  }
 
   Write-Output 'Installing production Node dependencies in staging directory...'
   & $npm ci --omit=dev --ignore-scripts --prefix $stageDir
   if ($LASTEXITCODE -ne 0) { throw "Staged npm ci failed with exit code $LASTEXITCODE" }
+  Remove-Item -LiteralPath (Join-Path $stageDir 'package-lock.json') -Force -ErrorAction SilentlyContinue
 
   $resolvedOutDir = if ([IO.Path]::IsPathRooted($OutputDir)) { $OutputDir } else { Join-Path $root $OutputDir }
   New-Item -ItemType Directory -Path $resolvedOutDir -Force | Out-Null
 
+  if (-not $NoDelta -and $token) {
+    Write-Output 'Hydrating previous GitHub release assets for delta generation...'
+    $downloadArgs = @(
+      'download', 'github',
+      '--repoUrl', 'https://github.com/AlexMollard/Axiom',
+      '--token', $token,
+      '--outputDir', $resolvedOutDir
+    )
+    if ($Channel) { $downloadArgs += @('--channel', $Channel) }
+    if ($PreRelease) { $downloadArgs += '--pre' }
+    & $vpk @downloadArgs 2>$null | Out-Null
+  }
+
   $iconPath = Join-Path $root 'src-tauri\icons\icon.ico'
   Write-Output "Packing AxiomDesktop v$version with Velopack..."
-  & $vpk pack `
-    --packId AxiomDesktop `
-    --packTitle Axiom `
-    --packAuthors 'Alex Mollard' `
-    --packVersion $version `
-    --packDir $stageDir `
-    --mainExe axiom.exe `
-    --icon $iconPath `
-    --outputDir $resolvedOutDir `
-    --shortcuts 'Desktop,StartMenuRoot'
+  $packArgs = @(
+    'pack',
+    '--packId', 'AxiomDesktop',
+    '--packTitle', 'Axiom',
+    '--packAuthors', 'Alex Mollard',
+    '--packVersion', $version,
+    '--packDir', $stageDir,
+    '--mainExe', 'axiom.exe',
+    '--icon', $iconPath,
+    '--outputDir', $resolvedOutDir,
+    '--runtime', 'win-x64',
+    '--aumid', 'com.alexmollard.axiom',
+    '--framework', 'webview2',
+    '--shortcuts', 'Desktop,StartMenuRoot'
+  )
+  if ($ReleaseNotes) { $packArgs += @('--releaseNotes', $ReleaseNotes) }
+  if ($Channel) { $packArgs += @('--channel', $Channel) }
+  if ($NoPortable) { $packArgs += '--noPortable' }
+
+  & $vpk @packArgs
   if ($LASTEXITCODE -ne 0) { throw "vpk pack failed with exit code $LASTEXITCODE" }
 
   $setupExe = Join-Path $resolvedOutDir 'AxiomDesktop-win-Setup.exe'
@@ -95,27 +148,22 @@ try {
   }
 
   if ($Publish) {
-    $token = $GitHubToken
-    if (-not $token) { $token = $env:AXIOM_GITHUB_TOKEN }
-    if (-not $token) { $token = $env:GITHUB_TOKEN }
-    if (-not $token) { $token = $env:GH_TOKEN }
-    if (-not $token) {
-      $gh = Get-Command gh -ErrorAction SilentlyContinue | Select-Object -First 1 -ExpandProperty Source
-      if ($gh) {
-        $token = (& $gh auth token 2>$null | Out-String).Trim()
-      }
-    }
     if (-not $token) {
       throw 'No GitHub token found. Pass -GitHubToken or authenticate with gh auth login.'
     }
     Write-Output "Uploading AxiomDesktop v$version to GitHub Releases..."
-    & $vpk upload github `
-      --outputDir $resolvedOutDir `
-      --repoUrl 'https://github.com/AlexMollard/Axiom' `
-      --token $token `
-      --tag "v$version" `
-      --releaseName "Axiom v$version" `
-      --publish
+    $uploadArgs = @(
+      'upload', 'github',
+      '--outputDir', $resolvedOutDir,
+      '--repoUrl', 'https://github.com/AlexMollard/Axiom',
+      '--token', $token,
+      '--tag', "v$version",
+      '--releaseName', "Axiom v$version",
+      '--publish'
+    )
+    if ($Channel) { $uploadArgs += @('--channel', $Channel) }
+    if ($PreRelease) { $uploadArgs += '--pre' }
+    & $vpk @uploadArgs
     if ($LASTEXITCODE -ne 0) { throw "vpk upload github failed with exit code $LASTEXITCODE" }
     Write-Output "Published Axiom v$version to GitHub Releases."
   }

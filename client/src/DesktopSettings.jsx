@@ -77,14 +77,16 @@ export default function DesktopSettings({
     updatePrefs({ mutedWorkspaces });
   };
 
-  const doRestart = async () => {
+  const doRestart = async (takeover = false) => {
     setBusy(true);
     setStatus(null);
     try {
-      const backend = await restartBackend();
+      const backend = await restartBackend(takeover);
       setInfo(prev => (prev ? { ...prev, backend } : prev));
       setStatus({
-        text: backend.healthy ? 'Backend restarted.' : backend.error || 'Backend unavailable.',
+        text: backend.healthy
+          ? (takeover ? 'Background service switched to this Axiom installation.' : 'Backend restarted.')
+          : (backend.error || 'Backend unavailable.'),
         error: !backend.healthy,
       });
     } catch (e) {
@@ -213,12 +215,23 @@ export default function DesktopSettings({
                   <span className="muted">
                     Backend: <strong>{info.backend.mode}</strong> on {info.backend.baseUrl}
                     {info.backend.pid ? ` (PID ${info.backend.pid})` : ''}
+                    {info.backend.appVersion ? ` · v${info.backend.appVersion}` : ''}
                   </span>
+                  {info.backend.versionMismatch && (
+                    <span className="management-error" role="status">
+                      Running backend is v{info.backend.appVersion || 'unknown'} while desktop shell is v{info.version}.
+                    </span>
+                  )}
                   <span className="muted">Global hotkey: <code>{info.hotkey}</code></span>
                   <div className="desktop-settings-row">
-                    <button type="button" className="button" disabled={busy} onClick={doRestart}>
+                    <button type="button" className="button" disabled={busy} onClick={() => doRestart(false)}>
                       {busy ? 'Restarting...' : 'Restart backend'}
                     </button>
+                    {info.backend.versionMismatch && (
+                      <button type="button" className="button button-primary" disabled={busy} onClick={() => doRestart(true)}>
+                        {busy ? 'Switching...' : 'Switch service to this version'}
+                      </button>
+                    )}
                     <button type="button" className="button" onClick={() => revealInExplorer('vault')}>
                       Open vault folder
                     </button>
@@ -231,7 +244,7 @@ export default function DesktopSettings({
 
               <div className="desktop-settings-section">
                 <span className="muted">
-                  Updates (Velopack): <strong>v{updateInfo?.currentVersion || info?.version || '1.3.0'}</strong>
+                  Updates (Velopack): <strong>{updateInfo?.currentVersion || info?.version ? `v${updateInfo?.currentVersion || info?.version}` : 'Unknown'}</strong>
                   {updateInfo?.targetVersion ? ` -> v${updateInfo.targetVersion} available` : ''}
                 </span>
                 {updateInfo?.message && <span className="muted">{updateInfo.message}</span>}

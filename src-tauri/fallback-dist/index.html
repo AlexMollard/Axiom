@@ -1,0 +1,112 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Axiom - Connecting to Backend</title>
+<style>
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; font-family: system-ui, -apple-system, sans-serif; background: #181716; color: #f0ebe6; }
+  .shell { min-height: 100%; display: flex; flex-direction: column; }
+  .bar { height: 38px; display: flex; align-items: center; justify-content: space-between; padding: 0 12px; background: #131211; border-bottom: 1px solid #2b2724; -webkit-app-region: drag; user-select: none; }
+  .bar-title { font-size: 12px; font-weight: 600; color: #d0c5bb; }
+  .bar-actions { display: flex; gap: 6px; -webkit-app-region: no-drag; }
+  .win-btn { width: 28px; height: 24px; border: 0; border-radius: 6px; background: transparent; color: #d0c5bb; cursor: pointer; font-size: 13px; }
+  .win-btn:hover { background: #2c2825; color: #fff; }
+  .wrap { flex: 1; display: grid; place-items: center; padding: 28px; }
+  .card { width: 100%; max-width: 620px; background: #211f1e; border: 1px solid #3b3430; border-radius: 14px; padding: 26px; }
+  h1 { margin: 0 0 10px; font-size: 20px; color: #efb99d; }
+  p { margin: 8px 0; color: #d0c5bb; font-size: 14px; line-height: 1.5; }
+  .err { color: #f2b7a6; background: #34231f; border: 1px solid #795442; padding: 12px; border-radius: 8px; overflow-wrap: anywhere; }
+  code { display: block; background: #171514; padding: 10px 12px; border-radius: 8px; color: #d0c5bb; overflow-wrap: anywhere; font-size: 12px; }
+  .actions { display: flex; gap: 10px; flex-wrap: wrap; margin-top: 18px; }
+  .btn { padding: 9px 15px; border-radius: 8px; border: 1px solid #4a413b; background: #2a2725; color: #f0ebe6; font-weight: 600; cursor: pointer; font-size: 13px; }
+  .btn:hover:not(:disabled) { background: #36322f; }
+  .btn-primary { border-color: #d39476; background: #d39476; color: #231812; }
+  .btn-primary:hover:not(:disabled) { background: #e0a386; }
+  .btn:disabled { opacity: 0.6; cursor: default; }
+</style>
+</head>
+<body>
+  <div class="shell">
+    <div class="bar" data-tauri-drag-region>
+      <span class="bar-title">Axiom</span>
+      <div class="bar-actions">
+        <button class="win-btn" id="min-btn" title="Minimize">-</button>
+        <button class="win-btn" id="close-btn" title="Close">x</button>
+      </div>
+    </div>
+    <div class="wrap">
+      <div class="card">
+        <h1>Axiom could not connect to its local backend</h1>
+        <p class="err" id="err-box">Checking backend status...</p>
+        <p>Configuration path:</p>
+        <code id="cfg-box">Loading...</code>
+        <div class="actions">
+          <button class="btn btn-primary" id="retry-btn">Retry Connection</button>
+          <button class="btn" id="restart-btn">Restart Backend</button>
+          <button class="btn" id="takeover-btn" style="display:none">Switch Service to This Version</button>
+        </div>
+      </div>
+    </div>
+  </div>
+  <script>
+    const tauri = window.__TAURI__;
+    const errBox = document.getElementById('err-box');
+    const cfgBox = document.getElementById('cfg-box');
+    const retryBtn = document.getElementById('retry-btn');
+    const restartBtn = document.getElementById('restart-btn');
+    const takeoverBtn = document.getElementById('takeover-btn');
+
+    function applyStatus(status) {
+      if (!status) return;
+      cfgBox.textContent = status.configPath || 'Unknown';
+      if (status.healthy && status.baseUrl) {
+        window.location.replace(status.baseUrl + '/');
+        return;
+      }
+      errBox.textContent = status.error || ('Backend disconnected (' + (status.mode || 'unknown') + ').');
+      if (status.error && status.error.includes('not owned')) {
+        takeoverBtn.style.display = 'inline-block';
+      }
+    }
+
+    async function refresh() {
+      if (!tauri?.core) return;
+      retryBtn.disabled = true;
+      try {
+        applyStatus(await tauri.core.invoke('desktop_backend_status'));
+      } catch (e) {
+        errBox.textContent = String(e);
+      } finally {
+        retryBtn.disabled = false;
+      }
+    }
+
+    async function restart(takeover) {
+      if (!tauri?.core) return;
+      restartBtn.disabled = true;
+      takeoverBtn.disabled = true;
+      errBox.textContent = takeover ? 'Switching background service...' : 'Restarting local backend...';
+      try {
+        applyStatus(await tauri.core.invoke('desktop_restart_backend', { takeover: Boolean(takeover) }));
+      } catch (e) {
+        errBox.textContent = String(e);
+      } finally {
+        restartBtn.disabled = false;
+        takeoverBtn.disabled = false;
+      }
+    }
+
+    document.getElementById('min-btn').addEventListener('click', () => tauri?.window?.getCurrentWindow()?.minimize());
+    document.getElementById('close-btn').addEventListener('click', () => tauri?.window?.getCurrentWindow()?.close());
+    retryBtn.addEventListener('click', refresh);
+    restartBtn.addEventListener('click', () => restart(false));
+    takeoverBtn.addEventListener('click', () => restart(true));
+
+    if (tauri?.event) {
+      tauri.event.listen('axiom://backend-status', event => applyStatus(event.payload));
+    }
+    refresh();
+  </script>
+</body>
+</html>

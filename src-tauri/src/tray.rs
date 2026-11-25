@@ -1,4 +1,6 @@
-use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::collections::{HashMap, HashSet};
+use std::path::PathBuf;
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use tauri::image::Image;
 use tauri::menu::{Menu, MenuItem, PredefinedMenuItem};
@@ -14,18 +16,53 @@ pub struct TrayHandles {
 }
 
 pub struct AppRuntime {
-    pub backend: Arc<Mutex<BackendManager>>,
-    pub state_dir: std::path::PathBuf,
+    pub backend: Arc<BackendManager>,
+    pub state_dir: PathBuf,
     pub prefs: Mutex<storage::DesktopPrefs>,
-    pub dirty_tabs: AtomicUsize,
+    pub dirty_tabs: Mutex<HashMap<String, usize>>,
     pub quitting: AtomicBool,
+    pub update_in_flight: AtomicBool,
+    pub deferred_maximize: AtomicBool,
     pub tray: Mutex<Option<TrayHandles>>,
     pub pending_update: Mutex<Option<velopack::UpdateInfo>>,
+    pub saved_files: Mutex<HashSet<PathBuf>>,
+    pub pending_bounds: Mutex<Option<storage::WindowBounds>>,
+    pub bounds_seq: AtomicU64,
+}
+
+impl AppRuntime {
+    pub fn total_dirty_tabs(&self) -> usize {
+        self.dirty_tabs
+            .lock()
+            .map(|m| m.values().sum())
+            .unwrap_or(0)
+    }
+
+    pub fn window_dirty_tabs(&self, label: &str) -> usize {
+        self.dirty_tabs
+            .lock()
+            .map(|m| m.get(label).copied().unwrap_or(0))
+            .unwrap_or(0)
+    }
+
+    pub fn set_window_dirty_tabs(&self, label: &str, count: usize) {
+        if let Ok(mut map) = self.dirty_tabs.lock() {
+            if count == 0 {
+                map.remove(label);
+            } else {
+                map.insert(label.to_string(), count);
+            }
+        }
+    }
 }
 
 pub fn show_main_window(app: &AppHandle) {
     if let Some(window) = app.get_webview_window("main") {
         let _ = window.show();
+        let state = app.state::<AppRuntime>();
+        if state.deferred_maximize.swap(false, Ordering::SeqCst) {
+            let _ = window.maximize();
+        }
         let _ = window.unminimize();
         let _ = window.set_focus();
     }
@@ -129,25 +166,17 @@ pub fn setup_tray(app: &AppHandle, status_label: &str) -> Result<(), String> {
             "new_note" => navigate_main(app, "/?edit=1"),
             "open_vault" => {
                 let state = app.state::<AppRuntime>();
-                if let Ok(backend) = state.backend.lock() {
-                    let _ = std::process::Command::new("explorer.exe")
-                        .arg(&backend.vault_path)
-                        .spawn();
-                };
+                let _ = std::process::Command::new("explorer.exe")
+                    .arg(&state.backend.vault_path)
+                    .spawn();
             }
             "backup" => {
                 let handle = app.clone();
                 let backend_arc = Arc::clone(&app.state::<AppRuntime>().backend);
                 tauri::async_runtime::spawn(async move {
-                    let result = tauri::async_runtime::spawn_blocking(move || {
-                        if let Ok(backend) = backend_arc.lock() {
-                            backend.trigger_backup()
-                        } else {
-                            Err("Backend lock unavailable.".to_string())
-                        }
-                    })
-                    .await
-                    .unwrap_or_else(|e| Err(format!("Backup task failed: {e}")));
+                    let result = tauri::async_runtime::spawn_blocking(move || backend_arc.trigger_backup())
+                        .await
+                        .unwrap_or_else(|e| Err(format!("Backup task failed: {e}")));
                     if let Err(err) = result {
                         let _ = handle.emit_to("main", "axiom://toast-error", err);
                     } else {
@@ -157,25 +186,16 @@ pub fn setup_tray(app: &AppHandle, status_label: &str) -> Result<(), String> {
             }
             "browser" => {
                 let state = app.state::<AppRuntime>();
-                if let Ok(backend) = state.backend.lock() {
-                    let url = backend.base_url();
-                    let _ = open_external_url(&url);
-                };
+                let url = state.backend.base_url();
+                let _ = open_external_url(&url);
             }
             "restart" => {
                 let handle = app.clone();
                 let backend_arc = Arc::clone(&app.state::<AppRuntime>().backend);
                 tauri::async_runtime::spawn(async move {
-                    let status = tauri::async_runtime::spawn_blocking(move || {
-                        if let Ok(mut backend) = backend_arc.lock() {
-                            Some(backend.restart())
-                        } else {
-                            None
-                        }
-                    })
-                    .await
-                    .ok()
-                    .flatten();
+                    let status = tauri::async_runtime::spawn_blocking(move || backend_arc.restart(false))
+                        .await
+                        .ok();
                     if let Some(status) = status {
                         update_tray_backend_status(&handle, &status);
                         let _ = handle.emit("axiom://backend-status", status);
@@ -203,10 +223,13 @@ pub fn setup_tray(app: &AppHandle, status_label: &str) -> Result<(), String> {
             }
             "quit" => {
                 let state = app.state::<AppRuntime>();
-                state.quitting.store(true, Ordering::SeqCst);
-                if let Ok(mut backend) = state.backend.lock() {
-                    backend.shutdown_if_spawned();
+                if state.total_dirty_tabs() > 0 {
+                    show_main_window(app);
+                    let _ = app.emit_to("main", "axiom://confirm-close", ());
+                    return;
                 }
+                state.quitting.store(true, Ordering::SeqCst);
+                state.backend.shutdown_if_spawned();
                 app.exit(0);
             }
             _ => {}
@@ -262,21 +285,63 @@ pub fn update_tray_backend_status(app: &AppHandle, status: &crate::backend::Back
     };
 }
 
+pub fn validate_external_url(raw: &str) -> Result<url::Url, String> {
+    let parsed = url::Url::parse(raw).map_err(|e| format!("Invalid URL: {e}"))?;
+    match parsed.scheme() {
+        "http" | "https" | "obsidian" => Ok(parsed),
+        scheme => Err(format!("Unsupported URL scheme: {scheme}")),
+    }
+}
+
 pub fn open_external_url(url: &str) -> Result<(), String> {
+    let parsed = validate_external_url(url)?;
     #[cfg(windows)]
     {
-        use std::os::windows::process::CommandExt;
-        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
-        std::process::Command::new("cmd")
-            .args(["/c", "start", "", url])
-            .creation_flags(CREATE_NO_WINDOW)
-            .spawn()
-            .map_err(|e| format!("Failed to open URL: {e}"))?;
+        use windows_sys::Win32::UI::Shell::ShellExecuteW;
+        use windows_sys::Win32::UI::WindowsAndMessaging::SW_SHOWNORMAL;
+
+        let op: Vec<u16> = "open".encode_utf16().chain(std::iter::once(0)).collect();
+        let target: Vec<u16> = parsed
+            .as_str()
+            .encode_utf16()
+            .chain(std::iter::once(0))
+            .collect();
+        let result = unsafe {
+            ShellExecuteW(
+                std::ptr::null_mut(),
+                op.as_ptr(),
+                target.as_ptr(),
+                std::ptr::null(),
+                std::ptr::null(),
+                SW_SHOWNORMAL,
+            )
+        };
+        if (result as isize) <= 32 {
+            return Err(format!("Failed to open URL (ShellExecuteW code {}).", result as isize));
+        }
         return Ok(());
     }
     #[cfg(not(windows))]
     {
-        let _ = url;
+        let _ = parsed;
         Err("External URL launch is configured for Windows.".to_string())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn external_url_validation_allows_safe_schemes_with_query_params() {
+        let obsidian = validate_external_url("obsidian://open?vault=Vault&file=Owner%2FNotes%2FTest.md").unwrap();
+        assert_eq!(obsidian.scheme(), "obsidian");
+        assert!(obsidian.as_str().contains("&file=Owner%2FNotes%2FTest.md"));
+
+        assert!(validate_external_url("http://127.0.0.1:4318/?view=review").is_ok());
+        assert!(validate_external_url("https://github.com/AlexMollard/Axiom").is_ok());
+        assert!(validate_external_url("file:///C:/Windows/System32/cmd.exe").is_err());
+        assert!(validate_external_url("javascript:alert(1)").is_err());
+        assert!(validate_external_url("not a url").is_err());
     }
 }

@@ -1,6 +1,7 @@
 use serde::Serialize;
 use std::path::PathBuf;
 use std::process::{Command, Stdio};
+use std::sync::OnceLock;
 use velopack::{sources, Error as VelopackError, UpdateCheck, UpdateInfo, UpdateManager};
 
 pub const DEFAULT_UPDATE_REPO: &str = "https://github.com/AlexMollard/Axiom";
@@ -34,6 +35,8 @@ impl UpdateFeed {
     }
 }
 
+static GH_TOKEN_CACHE: OnceLock<Option<String>> = OnceLock::new();
+
 pub fn resolve_github_token() -> Option<String> {
     for key in ["AXIOM_GITHUB_TOKEN", "GITHUB_TOKEN", "GH_TOKEN"] {
         if let Ok(val) = std::env::var(key) {
@@ -44,36 +47,43 @@ pub fn resolve_github_token() -> Option<String> {
         }
     }
 
-    let mut cmd = Command::new("gh");
-    cmd.args(["auth", "token"])
-        .stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::null());
-    #[cfg(windows)]
-    {
-        use std::os::windows::process::CommandExt;
-        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
-        cmd.creation_flags(CREATE_NO_WINDOW);
-    }
-
-    if let Ok(output) = cmd.output() {
-        if output.status.success() {
-            let token = String::from_utf8_lossy(&output.stdout).trim().to_string();
-            if !token.is_empty() {
-                return Some(token);
+    GH_TOKEN_CACHE
+        .get_or_init(|| {
+            let mut cmd = Command::new("gh");
+            cmd.args(["auth", "token"])
+                .stdin(Stdio::null())
+                .stdout(Stdio::piped())
+                .stderr(Stdio::null());
+            #[cfg(windows)]
+            {
+                use std::os::windows::process::CommandExt;
+                const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+                cmd.creation_flags(CREATE_NO_WINDOW);
             }
-        }
-    }
-    None
+
+            if let Ok(output) = cmd.output() {
+                if output.status.success() {
+                    let token = String::from_utf8_lossy(&output.stdout).trim().to_string();
+                    if !token.is_empty() {
+                        return Some(token);
+                    }
+                }
+            }
+            None
+        })
+        .clone()
 }
 
-pub fn resolve_update_feed_from_value(raw: Option<&str>, token: Option<String>) -> UpdateFeed {
+pub fn resolve_update_feed_from_value<F>(raw: Option<&str>, resolve_token: F) -> UpdateFeed
+where
+    F: FnOnce() -> Option<String>,
+{
     if let Some(val) = raw.map(str::trim).filter(|s| !s.is_empty()) {
         if val.starts_with("http://") || val.starts_with("https://") {
             if val.to_ascii_lowercase().starts_with("https://github.com/") {
                 return UpdateFeed::Github {
                     repo: val.trim_end_matches('/').to_string(),
-                    token,
+                    token: resolve_token(),
                 };
             }
             return UpdateFeed::Http(val.to_string());
@@ -82,14 +92,13 @@ pub fn resolve_update_feed_from_value(raw: Option<&str>, token: Option<String>) 
     }
     UpdateFeed::Github {
         repo: DEFAULT_UPDATE_REPO.to_string(),
-        token,
+        token: resolve_token(),
     }
 }
 
 pub fn resolve_update_feed() -> UpdateFeed {
     let raw = std::env::var("AXIOM_UPDATE_URL").ok();
-    let token = resolve_github_token();
-    resolve_update_feed_from_value(raw.as_deref(), token)
+    resolve_update_feed_from_value(raw.as_deref(), resolve_github_token)
 }
 
 fn create_manager_for_feed(feed: &UpdateFeed) -> Result<UpdateManager, VelopackError> {
@@ -165,6 +174,22 @@ pub fn check_updates() -> (Result<UpdateCheckResult, String>, Option<UpdateInfo>
     }
 }
 
+pub fn forwarded_restart_args() -> Vec<String> {
+    let mut out = Vec::new();
+    let mut args = std::env::args().skip(1);
+    while let Some(arg) = args.next() {
+        if arg == "--config" {
+            if let Some(val) = args.next() {
+                out.push("--config".to_string());
+                out.push(val);
+            }
+        } else if arg.starts_with("--config=") {
+            out.push(arg);
+        }
+    }
+    out
+}
+
 pub fn download_and_prepare_update(update_info: &UpdateInfo) -> Result<(), String> {
     let feed = resolve_update_feed();
     let manager = create_manager_for_feed(&feed)
@@ -172,8 +197,9 @@ pub fn download_and_prepare_update(update_info: &UpdateInfo) -> Result<(), Strin
     manager
         .download_updates(update_info, None)
         .map_err(|e| format!("Failed to download update: {e}"))?;
+    let restart_args = forwarded_restart_args();
     manager
-        .wait_exit_then_apply_updates(update_info, false, true, Vec::<String>::new())
+        .wait_exit_then_apply_updates(update_info, false, true, restart_args)
         .map_err(|e| format!("Failed to stage update installer: {e}"))?;
     Ok(())
 }
@@ -185,27 +211,36 @@ mod tests {
     #[test]
     fn resolves_default_github_and_custom_feeds() {
         assert_eq!(
-            resolve_update_feed_from_value(None, Some("tok".to_string())),
+            resolve_update_feed_from_value(None, || Some("tok".to_string())),
             UpdateFeed::Github {
                 repo: DEFAULT_UPDATE_REPO.to_string(),
                 token: Some("tok".to_string()),
             }
         );
         assert_eq!(
-            resolve_update_feed_from_value(Some("https://github.com/AlexMollard/Axiom/"), None),
+            resolve_update_feed_from_value(Some("https://github.com/AlexMollard/Axiom/"), || None),
             UpdateFeed::Github {
                 repo: "https://github.com/AlexMollard/Axiom".to_string(),
                 token: None,
             }
         );
+        let mut called = false;
         assert_eq!(
-            resolve_update_feed_from_value(Some("https://updates.example.com/axiom"), None),
+            resolve_update_feed_from_value(Some("https://updates.example.com/axiom"), || {
+                called = true;
+                None
+            }),
             UpdateFeed::Http("https://updates.example.com/axiom".to_string())
         );
+        assert!(!called, "non-GitHub HTTP feed should not resolve GitHub token");
         assert_eq!(
-            resolve_update_feed_from_value(Some(r"C:\Temp\AxiomReleases"), None),
+            resolve_update_feed_from_value(Some(r"C:\Temp\AxiomReleases"), || {
+                called = true;
+                None
+            }),
             UpdateFeed::LocalDir(PathBuf::from(r"C:\Temp\AxiomReleases"))
         );
+        assert!(!called, "local directory feed should not resolve GitHub token");
     }
 
     #[test]

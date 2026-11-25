@@ -7,7 +7,7 @@ edition = "2021"
 
 [lib]
 name = "axiom_desktop_lib"
-crate-type = ["staticlib", "cdylib", "rlib"]
+crate-type = ["rlib"]
 
 [[bin]]
 name = "axiom"
@@ -31,3 +31,13 @@ tokio = { version = "1", features = ["time", "rt-multi-thread"] }
 url = "2"
 urlencoding = "2"
 velopack = "1.2.161"
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61", features = ["Win32_UI_Shell", "Win32_UI_WindowsAndMessaging", "Win32_Graphics_Dwm", "Win32_Foundation"] }
+
+[profile.release]
+lto = "thin"
+codegen-units = 1
+strip = true
+opt-level = "s"
+panic = "abort"

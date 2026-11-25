@@ -3,7 +3,7 @@ use sha2::{Digest, Sha256};
 use std::path::PathBuf;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
-use tauri::{AppHandle, Emitter, Manager, State, WebviewUrl, WebviewWindowBuilder};
+use tauri::{AppHandle, Emitter, Manager, State, WebviewUrl, WebviewWindowBuilder, WindowEvent};
 use tauri_plugin_dialog::DialogExt;
 use tauri_plugin_notification::NotificationExt;
 
@@ -41,14 +41,9 @@ pub async fn desktop_info(state: State<'_, AppRuntime>) -> Result<DesktopInfo, S
         .map_err(|_| "Desktop preferences unavailable.".to_string())?
         .clone();
     let backend_arc = Arc::clone(&state.backend);
-    let backend = tauri::async_runtime::spawn_blocking(move || {
-        backend_arc
-            .lock()
-            .map_err(|_| "Backend state unavailable.".to_string())
-            .map(|mut b| b.current_status())
-    })
-    .await
-    .map_err(|e| format!("Desktop info task failed: {e}"))??;
+    let backend = tauri::async_runtime::spawn_blocking(move || backend_arc.current_status())
+        .await
+        .map_err(|e| format!("Desktop info task failed: {e}"))?;
     Ok(DesktopInfo {
         version: env!("CARGO_PKG_VERSION").to_string(),
         hotkey: "Ctrl+Alt+K".to_string(),
@@ -60,45 +55,33 @@ pub async fn desktop_info(state: State<'_, AppRuntime>) -> Result<DesktopInfo, S
 #[tauri::command]
 pub async fn desktop_backend_status(state: State<'_, AppRuntime>) -> Result<BackendStatus, String> {
     let backend_arc = Arc::clone(&state.backend);
-    tauri::async_runtime::spawn_blocking(move || {
-        backend_arc
-            .lock()
-            .map_err(|_| "Backend state unavailable.".to_string())
-            .map(|mut b| b.current_status())
-    })
-    .await
-    .map_err(|e| format!("Backend status task failed: {e}"))?
+    tauri::async_runtime::spawn_blocking(move || backend_arc.current_status())
+        .await
+        .map_err(|e| format!("Backend status task failed: {e}"))
 }
 
 #[tauri::command]
 pub async fn desktop_restart_backend(
     app: AppHandle,
     state: State<'_, AppRuntime>,
+    takeover: Option<bool>,
 ) -> Result<BackendStatus, String> {
     let backend_arc = Arc::clone(&state.backend);
-    let status = tauri::async_runtime::spawn_blocking(move || {
-        backend_arc
-            .lock()
-            .map_err(|_| "Backend state unavailable.".to_string())
-            .map(|mut b| b.restart())
-    })
-    .await
-    .map_err(|e| format!("Restart task failed: {e}"))??;
+    let flag = takeover.unwrap_or(false);
+    let status = tauri::async_runtime::spawn_blocking(move || backend_arc.restart(flag))
+        .await
+        .map_err(|e| format!("Restart task failed: {e}"))?;
     update_tray_backend_status(&app, &status);
+    let _ = app.emit("axiom://backend-status", &status);
     Ok(status)
 }
 
 #[tauri::command]
 pub async fn desktop_trigger_backup(state: State<'_, AppRuntime>) -> Result<String, String> {
     let backend_arc = Arc::clone(&state.backend);
-    tauri::async_runtime::spawn_blocking(move || {
-        let backend = backend_arc
-            .lock()
-            .map_err(|_| "Backend state unavailable.".to_string())?;
-        backend.trigger_backup()
-    })
-    .await
-    .map_err(|e| format!("Backup task failed: {e}"))?
+    tauri::async_runtime::spawn_blocking(move || backend_arc.trigger_backup())
+        .await
+        .map_err(|e| format!("Backup task failed: {e}"))?
 }
 
 #[tauri::command]
@@ -155,6 +138,7 @@ pub fn desktop_delete_state(
 #[tauri::command]
 pub async fn desktop_save_file(
     app: AppHandle,
+    state: State<'_, AppRuntime>,
     default_name: String,
     content: String,
 ) -> Result<SaveFileResult, String> {
@@ -179,6 +163,11 @@ pub async fn desktop_save_file(
         .into_path()
         .map_err(|e| format!("Unsupported save target: {e}"))?;
     atomic_write_crlf(&path_buf, &content)?;
+    if let Ok(canon) = std::fs::canonicalize(&path_buf) {
+        if let Ok(mut saved) = state.saved_files.lock() {
+            saved.insert(canon);
+        }
+    }
     Ok(SaveFileResult {
         saved: true,
         path: Some(path_buf.to_string_lossy().into_owned()),
@@ -190,39 +179,47 @@ pub fn desktop_open_in_obsidian(
     state: State<'_, AppRuntime>,
     note_path: String,
 ) -> Result<(), String> {
-    let (vault_path, vault_name) = {
-        let backend = state
-            .backend
-            .lock()
-            .map_err(|_| "Backend state unavailable.".to_string())?;
-        (backend.vault_path.clone(), backend.vault_name.clone())
-    };
-    resolve_vault_file(&vault_path, &note_path)?;
+    resolve_vault_file(&state.backend.vault_path, &note_path)?;
     let url = format!(
         "obsidian://open?vault={}&file={}",
-        urlencoding::encode(&vault_name),
+        urlencoding::encode(&state.backend.vault_name),
         urlencoding::encode(&note_path)
     );
     open_external_url(&url)
 }
 
 fn find_vscode_binary() -> Option<PathBuf> {
+    let mut roots = Vec::new();
     if let Ok(local) = std::env::var("LOCALAPPDATA") {
-        let insiders = PathBuf::from(&local)
-            .join("Programs")
-            .join("Microsoft VS Code Insiders")
-            .join("bin")
-            .join("code-insiders.cmd");
-        if insiders.is_file() {
-            return Some(insiders);
+        roots.push(PathBuf::from(local).join("Programs"));
+    }
+    if let Ok(pf) = std::env::var("ProgramFiles") {
+        roots.push(PathBuf::from(pf));
+    }
+    for root in &roots {
+        let insiders_exe = root.join("Microsoft VS Code Insiders").join("Code - Insiders.exe");
+        if insiders_exe.is_file() {
+            return Some(insiders_exe);
         }
-        let stable = PathBuf::from(&local)
-            .join("Programs")
-            .join("Microsoft VS Code")
-            .join("bin")
-            .join("code.cmd");
-        if stable.is_file() {
-            return Some(stable);
+        let stable_exe = root.join("Microsoft VS Code").join("Code.exe");
+        if stable_exe.is_file() {
+            return Some(stable_exe);
+        }
+    }
+    if let Some(path_var) = std::env::var_os("PATH") {
+        for dir in std::env::split_paths(&path_var) {
+            for exe_name in ["Code - Insiders.exe", "Code.exe"] {
+                let direct = dir.join(exe_name);
+                if direct.is_file() {
+                    return Some(direct);
+                }
+                if let Some(parent) = dir.parent() {
+                    let parent_exe = parent.join(exe_name);
+                    if parent_exe.is_file() {
+                        return Some(parent_exe);
+                    }
+                }
+            }
         }
     }
     None
@@ -233,33 +230,17 @@ pub fn desktop_open_in_vscode(
     state: State<'_, AppRuntime>,
     note_path: String,
 ) -> Result<(), String> {
-    let vault_path = {
-        let backend = state
-            .backend
-            .lock()
-            .map_err(|_| "Backend state unavailable.".to_string())?;
-        backend.vault_path.clone()
-    };
-    let full = resolve_vault_file(&vault_path, &note_path)?;
-    let bin = find_vscode_binary();
+    let full = resolve_vault_file(&state.backend.vault_path, &note_path)?;
 
     #[cfg(windows)]
     {
         use std::os::windows::process::CommandExt;
         const CREATE_NO_WINDOW: u32 = 0x0800_0000;
-        let program = bin
-            .as_ref()
-            .map(|p| p.to_string_lossy().into_owned())
-            .unwrap_or_else(|| "code-insiders".to_string());
-        let launched = std::process::Command::new(&program)
+        let program = find_vscode_binary().ok_or_else(|| {
+            "Could not find VS Code or VS Code Insiders executable on this system.".to_string()
+        })?;
+        std::process::Command::new(&program)
             .arg(&full)
-            .creation_flags(CREATE_NO_WINDOW)
-            .spawn();
-        if launched.is_ok() {
-            return Ok(());
-        }
-        std::process::Command::new("cmd")
-            .args(["/c", "code", &full.to_string_lossy()])
             .creation_flags(CREATE_NO_WINDOW)
             .spawn()
             .map_err(|e| format!("Could not launch VS Code: {e}"))?;
@@ -267,9 +248,34 @@ pub fn desktop_open_in_vscode(
     }
     #[cfg(not(windows))]
     {
-        let _ = (full, bin);
+        let _ = full;
         Err("VS Code launch is configured for Windows.".to_string())
     }
+}
+
+fn is_allowed_reveal_file(
+    runtime: &AppRuntime,
+    candidate: &std::path::Path,
+) -> Result<PathBuf, String> {
+    let meta = std::fs::symlink_metadata(candidate)
+        .map_err(|_| "File could not be found on disk.".to_string())?;
+    if meta.file_type().is_symlink() || !meta.is_file() {
+        return Err("Only regular files can be revealed in Explorer.".to_string());
+    }
+    let canon = std::fs::canonicalize(candidate)
+        .map_err(|e| format!("Could not resolve file path: {e}"))?;
+    let in_vault = std::fs::canonicalize(&runtime.backend.vault_path)
+        .is_ok_and(|v| canon.starts_with(&v));
+    let in_backup = std::fs::canonicalize(&runtime.backend.backup_dir)
+        .is_ok_and(|b| canon.starts_with(&b));
+    let in_saved = runtime
+        .saved_files
+        .lock()
+        .is_ok_and(|s| s.contains(&canon));
+    if !in_vault && !in_backup && !in_saved {
+        return Err("Only files inside the vault, backup folder, or native exports can be revealed.".to_string());
+    }
+    Ok(crate::backend::strip_verbatim_prefix(&canon))
 }
 
 #[tauri::command]
@@ -278,17 +284,10 @@ pub fn desktop_reveal_in_explorer(
     target_kind: String,
     target_path: Option<String>,
 ) -> Result<(), String> {
-    let (vault_path, backup_dir) = {
-        let backend = state
-            .backend
-            .lock()
-            .map_err(|_| "Backend state unavailable.".to_string())?;
-        (backend.vault_path.clone(), backend.backup_dir.clone())
-    };
     match target_kind.as_str() {
         "note" => {
             let rel = target_path.ok_or_else(|| "A note path is required.".to_string())?;
-            let full = resolve_vault_file(&vault_path, &rel)?;
+            let full = resolve_vault_file(&state.backend.vault_path, &rel)?;
             std::process::Command::new("explorer.exe")
                 .arg(format!("/select,{}", full.to_string_lossy()))
                 .spawn()
@@ -296,10 +295,7 @@ pub fn desktop_reveal_in_explorer(
         }
         "file" => {
             let raw = target_path.ok_or_else(|| "A file path is required.".to_string())?;
-            let full = PathBuf::from(&raw);
-            if !full.is_file() {
-                return Err("File could not be found on disk.".to_string());
-            }
+            let full = is_allowed_reveal_file(&state, PathBuf::from(&raw).as_path())?;
             std::process::Command::new("explorer.exe")
                 .arg(format!("/select,{}", full.to_string_lossy()))
                 .spawn()
@@ -307,13 +303,13 @@ pub fn desktop_reveal_in_explorer(
         }
         "vault" => {
             std::process::Command::new("explorer.exe")
-                .arg(&vault_path)
+                .arg(&state.backend.vault_path)
                 .spawn()
                 .map_err(|e| format!("Could not open vault folder: {e}"))?;
         }
         "backup" => {
             std::process::Command::new("explorer.exe")
-                .arg(&backup_dir)
+                .arg(&state.backend.backup_dir)
                 .spawn()
                 .map_err(|e| format!("Could not open backup folder: {e}"))?;
         }
@@ -327,13 +323,7 @@ pub fn desktop_open_in_browser(
     state: State<'_, AppRuntime>,
     route_url: Option<String>,
 ) -> Result<(), String> {
-    let base = {
-        let backend = state
-            .backend
-            .lock()
-            .map_err(|_| "Backend state unavailable.".to_string())?;
-        backend.base_url()
-    };
+    let base = state.backend.base_url();
     let suffix = route_url.unwrap_or_else(|| "/".to_string());
     let clean = if suffix.starts_with('/') {
         suffix
@@ -383,13 +373,7 @@ pub async fn desktop_open_note_window(
     route_url: String,
     title: Option<String>,
 ) -> Result<(), String> {
-    let base = {
-        let backend = state
-            .backend
-            .lock()
-            .map_err(|_| "Backend state unavailable.".to_string())?;
-        backend.base_url()
-    };
+    let base = state.backend.base_url();
     let clean = if route_url.starts_with('/') {
         route_url
     } else {
@@ -421,9 +405,28 @@ pub async fn desktop_open_note_window(
             .icon(icon)
             .map_err(|e| format!("Could not set detached window icon: {e}"))?;
     }
-    builder
+    let detached_win = builder
         .build()
         .map_err(|e| format!("Could not open detached window: {e}"))?;
+    let app_for_detached = app.clone();
+    let label_for_detached = label.clone();
+    detached_win.on_window_event(move |event| match event {
+        WindowEvent::CloseRequested { api, .. } => {
+            let state = app_for_detached.state::<AppRuntime>();
+            if state.quitting.load(Ordering::SeqCst) {
+                return;
+            }
+            if state.window_dirty_tabs(&label_for_detached) > 0 {
+                api.prevent_close();
+                let _ = app_for_detached.emit_to(&label_for_detached, "axiom://confirm-close", ());
+            }
+        }
+        WindowEvent::Destroyed => {
+            let state = app_for_detached.state::<AppRuntime>();
+            state.set_window_dirty_tabs(&label_for_detached, 0);
+        }
+        _ => {}
+    });
     Ok(())
 }
 
@@ -448,17 +451,19 @@ pub fn desktop_hide_quick_overlay(app: AppHandle) -> Result<(), String> {
 }
 
 #[tauri::command]
-pub fn desktop_set_dirty_tabs(state: State<'_, AppRuntime>, count: usize) -> Result<(), String> {
-    state.dirty_tabs.store(count, Ordering::SeqCst);
+pub fn desktop_set_dirty_tabs(
+    window: tauri::WebviewWindow,
+    state: State<'_, AppRuntime>,
+    count: usize,
+) -> Result<(), String> {
+    state.set_window_dirty_tabs(window.label(), count);
     Ok(())
 }
 
 #[tauri::command]
 pub fn desktop_quit(app: AppHandle, state: State<'_, AppRuntime>) -> Result<(), String> {
     state.quitting.store(true, Ordering::SeqCst);
-    if let Ok(mut backend) = state.backend.lock() {
-        backend.shutdown_if_spawned();
-    }
+    state.backend.shutdown_if_spawned();
     app.exit(0);
     Ok(())
 }
@@ -486,34 +491,63 @@ pub async fn desktop_install_update(
     app: AppHandle,
     state: State<'_, AppRuntime>,
 ) -> Result<(), String> {
+    if state
+        .update_in_flight
+        .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
+        .is_err()
+    {
+        return Err("An update installation is already in progress.".to_string());
+    }
+
     let cached = state
         .pending_update
         .lock()
-        .map_err(|_| "Update state unavailable.".to_string())?
+        .map_err(|_| {
+            state.update_in_flight.store(false, Ordering::SeqCst);
+            "Update state unavailable.".to_string()
+        })?
         .clone();
     let info = match cached {
         Some(info) => info,
         None => {
-            let (result, fetched) =
-                tauri::async_runtime::spawn_blocking(crate::updater::check_updates)
-                    .await
-                    .map_err(|e| format!("Update check task failed: {e}"))?;
-            let checked = result?;
+            let fetched_res = tauri::async_runtime::spawn_blocking(crate::updater::check_updates)
+                .await
+                .map_err(|e| {
+                    state.update_in_flight.store(false, Ordering::SeqCst);
+                    format!("Update check task failed: {e}")
+                })?;
+            let checked = fetched_res.0.map_err(|e| {
+                state.update_in_flight.store(false, Ordering::SeqCst);
+                e
+            })?;
             if !checked.available {
+                state.update_in_flight.store(false, Ordering::SeqCst);
                 return Err(checked.message);
             }
-            fetched.ok_or_else(|| "Update metadata missing.".to_string())?
+            fetched_res.1.ok_or_else(|| {
+                state.update_in_flight.store(false, Ordering::SeqCst);
+                "Update metadata missing.".to_string()
+            })?
         }
     };
 
-    tauri::async_runtime::spawn_blocking(move || crate::updater::download_and_prepare_update(&info))
-        .await
-        .map_err(|e| format!("Update install task failed: {e}"))??;
+    if let Err(err) = tauri::async_runtime::spawn_blocking(move || {
+        crate::updater::download_and_prepare_update(&info)
+    })
+    .await
+    .map_err(|e| format!("Update install task failed: {e}"))
+    .and_then(|inner| inner)
+    {
+        state.update_in_flight.store(false, Ordering::SeqCst);
+        return Err(err);
+    }
 
     state.quitting.store(true, Ordering::SeqCst);
-    if let Ok(mut backend) = state.backend.lock() {
-        backend.shutdown_if_spawned();
-    }
+    let backend_arc = Arc::clone(&state.backend);
+    let _ = tauri::async_runtime::spawn_blocking(move || {
+        backend_arc.shutdown_owned_or_app_root_backend();
+    })
+    .await;
     let _ = app.emit("axiom://update-installing", ());
     app.exit(0);
     Ok(())

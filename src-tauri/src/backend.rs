@@ -3,6 +3,7 @@ use sha2::{Digest, Sha256};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
+use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
 #[derive(Debug, Clone, Deserialize)]
@@ -27,6 +28,8 @@ pub struct BackendStatus {
     pub backup_dir: String,
     pub pid: Option<u32>,
     pub uptime_seconds: Option<f64>,
+    pub app_version: Option<String>,
+    pub version_mismatch: bool,
     pub error: Option<String>,
 }
 
@@ -172,6 +175,55 @@ fn find_node_binary() -> String {
     "node".to_string()
 }
 
+pub fn stop_node_backend_for_root(app_root: &Path) {
+    #[cfg(windows)]
+    {
+        let server_mjs = app_root.join("src").join("server.mjs");
+        if !server_mjs.is_file() {
+            return;
+        }
+        let target = server_mjs.to_string_lossy().replace('/', "\\");
+        let ps_script = "param($t) $procs = Get-CimInstance Win32_Process -Filter \"Name = 'node.exe'\" -ErrorAction SilentlyContinue | Where-Object { $_.CommandLine -and $_.CommandLine.Replace('/', '\\').IndexOf($t, [StringComparison]::OrdinalIgnoreCase) -ge 0 }; foreach ($p in $procs) { Stop-Process -Id $p.ProcessId -ErrorAction SilentlyContinue; $pr = Get-Process -Id $p.ProcessId -ErrorAction SilentlyContinue; if ($pr) { $null = $pr.WaitForExit(5000) } }";
+        let run_shell = |exe: &str| {
+            use std::os::windows::process::CommandExt;
+            const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+            Command::new(exe)
+                .args(["-NoProfile", "-NonInteractive", "-WindowStyle", "Hidden", "-Command", ps_script, &target])
+                .creation_flags(CREATE_NO_WINDOW)
+                .stdin(Stdio::null())
+                .stdout(Stdio::null())
+                .stderr(Stdio::null())
+                .status()
+        };
+        if let Err(err) = run_shell("pwsh") {
+            if err.kind() == std::io::ErrorKind::NotFound {
+                let _ = run_shell("powershell");
+            }
+        }
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = app_root;
+    }
+}
+
+pub fn stop_current_dir_node_backend() {
+    if let Ok(exe) = std::env::current_exe() {
+        if let Some(dir) = exe.parent() {
+            stop_node_backend_for_root(dir);
+        }
+    }
+}
+
+#[derive(Debug)]
+struct BackendState {
+    mode: String,
+    last_error: Option<String>,
+    child: Option<Child>,
+    backend_version: Option<String>,
+    version_mismatch: bool,
+}
+
 pub struct BackendManager {
     pub config_path: PathBuf,
     pub config_id: String,
@@ -179,10 +231,9 @@ pub struct BackendManager {
     pub vault_name: String,
     pub backup_dir: PathBuf,
     pub port: u16,
-    pub mode: String,
-    pub last_error: Option<String>,
-    child: Option<Child>,
-    client: reqwest::blocking::Client,
+    health_client: reqwest::blocking::Client,
+    backup_client: reqwest::blocking::Client,
+    state: Mutex<BackendState>,
 }
 
 impl BackendManager {
@@ -196,11 +247,16 @@ impl BackendManager {
             .unwrap_or("Shared Brain")
             .to_string();
         let backup_dir = PathBuf::from(&parsed.backup_dir);
-        let client = reqwest::blocking::Client::builder()
+        let health_client = reqwest::blocking::Client::builder()
             .timeout(Duration::from_millis(1500))
             .no_proxy()
             .build()
-            .map_err(|e| format!("Failed to create HTTP client: {e}"))?;
+            .map_err(|e| format!("Failed to create health HTTP client: {e}"))?;
+        let backup_client = reqwest::blocking::Client::builder()
+            .timeout(Duration::from_secs(60))
+            .no_proxy()
+            .build()
+            .map_err(|e| format!("Failed to create backup HTTP client: {e}"))?;
         Ok(Self {
             config_path,
             config_id,
@@ -208,10 +264,15 @@ impl BackendManager {
             vault_name,
             backup_dir,
             port: parsed.port,
-            mode: "uninitialized".to_string(),
-            last_error: None,
-            child: None,
-            client,
+            health_client,
+            backup_client,
+            state: Mutex::new(BackendState {
+                mode: "uninitialized".to_string(),
+                last_error: None,
+                child: None,
+                backend_version: None,
+                version_mismatch: false,
+            }),
         })
     }
 
@@ -221,7 +282,7 @@ impl BackendManager {
 
     fn probe_health(&self) -> Result<Option<HealthResponse>, String> {
         let url = format!("{}/health", self.base_url());
-        match self.client.get(&url).send() {
+        match self.health_client.get(&url).send() {
             Ok(resp) => {
                 if !resp.status().is_success() {
                     return Ok(None);
@@ -235,7 +296,7 @@ impl BackendManager {
         }
     }
 
-    fn restart_attached_via_script(&self) -> Result<(), String> {
+    fn restart_attached_via_script(&self, takeover: bool) -> Result<(), String> {
         let Some(app_root) = find_app_root() else {
             return Err("Could not find Axiom checkout (scripts/start.ps1).".to_string());
         };
@@ -255,8 +316,11 @@ impl BackendManager {
                 .arg("Hidden")
                 .arg("-File")
                 .arg(&start_script)
-                .arg("-Restart")
-                .arg("-ConfigPath")
+                .arg("-Restart");
+            if takeover {
+                cmd.arg("-TakeOver");
+            }
+            cmd.arg("-ConfigPath")
                 .arg(&self.config_path)
                 .current_dir(&app_root)
                 .stdin(Stdio::null())
@@ -291,7 +355,7 @@ impl BackendManager {
         })
     }
 
-    pub fn ensure_running(&mut self) -> BackendStatus {
+    pub fn ensure_running(&self) -> BackendStatus {
         if let Ok(Some(health)) = self.probe_health() {
             if health.ok {
                 if let Some(ref found_id) = health.config_id {
@@ -300,29 +364,46 @@ impl BackendManager {
                             "Port {} is already served by another Axiom config ({found_id} != {}).",
                             self.port, self.config_id
                         );
-                        self.mode = "error".to_string();
-                        self.last_error = Some(msg);
+                        if let Ok(mut s) = self.state.lock() {
+                            s.mode = "error".to_string();
+                            s.last_error = Some(msg);
+                            s.backend_version = health.app_version.clone();
+                            s.version_mismatch = false;
+                        }
                         return self.status_snapshot(Some(health));
                     }
                 }
+
+                let has_child = self
+                    .state
+                    .lock()
+                    .map(|s| s.child.is_some())
+                    .unwrap_or(false);
                 let needs_api_upgrade =
                     health.api_version.unwrap_or(0) < REQUIRED_BACKEND_API_VERSION;
-                let needs_version_restart = health.app_version.as_deref()
-                    != Some(env!("CARGO_PKG_VERSION"));
-                if self.child.is_none() && (needs_api_upgrade || needs_version_restart) {
+                let needs_version_restart =
+                    health.app_version.as_deref() != Some(env!("CARGO_PKG_VERSION"));
+
+                if !has_child && (needs_api_upgrade || needs_version_restart) {
                     let old_ver = health.api_version.unwrap_or(0);
-                    if let Err(err) = self.restart_attached_via_script() {
-                        if !needs_api_upgrade {
-                            self.mode = "attached".to_string();
-                            self.last_error = None;
-                            return self.status_snapshot(Some(health));
+                    if let Err(err) = self.restart_attached_via_script(false) {
+                        if let Ok(mut s) = self.state.lock() {
+                            s.backend_version = health.app_version.clone();
+                            if !needs_api_upgrade {
+                                s.mode = "attached".to_string();
+                                s.version_mismatch = true;
+                                s.last_error = Some(err);
+                            } else {
+                                s.mode = "error".to_string();
+                                s.version_mismatch = false;
+                                s.last_error = Some(format!(
+                                    "Attached Axiom backend is outdated (apiVersion {old_ver} < {REQUIRED_BACKEND_API_VERSION}) and auto-restart failed: {err}"
+                                ));
+                            }
                         }
-                        self.mode = "error".to_string();
-                        self.last_error = Some(format!(
-                            "Attached Axiom backend is outdated (apiVersion {old_ver} < {REQUIRED_BACKEND_API_VERSION}) and auto-restart failed: {err}"
-                        ));
                         return self.status_snapshot(Some(health));
                     }
+
                     let deadline = Instant::now() + Duration::from_secs(5);
                     while Instant::now() < deadline {
                         if let Ok(Some(refreshed)) = self.probe_health() {
@@ -333,43 +414,64 @@ impl BackendManager {
                                     || refreshed.app_version.as_deref()
                                         == Some(env!("CARGO_PKG_VERSION")))
                             {
-                                self.mode = "attached".to_string();
-                                self.last_error = None;
+                                if let Ok(mut s) = self.state.lock() {
+                                    s.mode = "attached".to_string();
+                                    s.backend_version = refreshed.app_version.clone();
+                                    s.version_mismatch = false;
+                                    s.last_error = None;
+                                }
                                 return self.status_snapshot(Some(refreshed));
                             }
                         }
                         std::thread::sleep(Duration::from_millis(200));
                     }
+
                     if let Ok(Some(still_old)) = self.probe_health() {
                         if still_old.ok {
-                            if still_old.api_version.unwrap_or(0) < REQUIRED_BACKEND_API_VERSION {
-                                self.mode = "error".to_string();
-                                self.last_error = Some(format!(
-                                    "Attached Axiom backend remained outdated after restart (apiVersion {} < {REQUIRED_BACKEND_API_VERSION}).",
-                                    still_old.api_version.unwrap_or(0)
-                                ));
-                                return self.status_snapshot(Some(still_old));
+                            if let Ok(mut s) = self.state.lock() {
+                                s.backend_version = still_old.app_version.clone();
+                                if still_old.api_version.unwrap_or(0)
+                                    < REQUIRED_BACKEND_API_VERSION
+                                {
+                                    s.mode = "error".to_string();
+                                    s.version_mismatch = false;
+                                    s.last_error = Some(format!(
+                                        "Attached Axiom backend remained outdated after restart (apiVersion {} < {REQUIRED_BACKEND_API_VERSION}).",
+                                        still_old.api_version.unwrap_or(0)
+                                    ));
+                                } else {
+                                    s.mode = "attached".to_string();
+                                    s.version_mismatch = still_old.app_version.as_deref()
+                                        != Some(env!("CARGO_PKG_VERSION"));
+                                    s.last_error = None;
+                                }
                             }
-                            self.mode = "attached".to_string();
-                            self.last_error = None;
                             return self.status_snapshot(Some(still_old));
                         }
                     }
                 } else {
-                    if self.child.is_none() {
-                        self.mode = "attached".to_string();
-                    } else {
-                        self.mode = "spawned".to_string();
+                    if let Ok(mut s) = self.state.lock() {
+                        s.mode = if has_child {
+                            "spawned".to_string()
+                        } else {
+                            "attached".to_string()
+                        };
+                        s.backend_version = health.app_version.clone();
+                        s.version_mismatch = needs_version_restart && !has_child;
+                        s.last_error = None;
                     }
-                    self.last_error = None;
                     return self.status_snapshot(Some(health));
                 }
             }
         }
 
         let Some(app_root) = find_app_root() else {
-            self.mode = "error".to_string();
-            self.last_error = Some("Could not find Axiom checkout (src/server.mjs).".to_string());
+            if let Ok(mut s) = self.state.lock() {
+                s.mode = "error".to_string();
+                s.version_mismatch = false;
+                s.last_error =
+                    Some("Could not find Axiom backend (src/server.mjs).".to_string());
+            }
             return self.status_snapshot(None);
         };
         let server_script = app_root.join("src").join("server.mjs");
@@ -390,12 +492,18 @@ impl BackendManager {
 
         match cmd.spawn() {
             Ok(child) => {
-                self.child = Some(child);
-                self.mode = "spawned".to_string();
+                if let Ok(mut s) = self.state.lock() {
+                    s.child = Some(child);
+                    s.mode = "spawned".to_string();
+                    s.version_mismatch = false;
+                }
             }
             Err(e) => {
-                self.mode = "error".to_string();
-                self.last_error = Some(format!("Failed to launch Node backend ({node}): {e}"));
+                if let Ok(mut s) = self.state.lock() {
+                    s.mode = "error".to_string();
+                    s.version_mismatch = false;
+                    s.last_error = Some(format!("Failed to launch Node backend ({node}): {e}"));
+                }
                 return self.status_snapshot(None);
             }
         }
@@ -404,51 +512,87 @@ impl BackendManager {
         while Instant::now() < deadline {
             if let Ok(Some(health)) = self.probe_health() {
                 if health.ok {
-                    self.last_error = None;
+                    if let Ok(mut s) = self.state.lock() {
+                        s.last_error = None;
+                        s.backend_version = health.app_version.clone();
+                        s.version_mismatch = false;
+                    }
                     return self.status_snapshot(Some(health));
                 }
             }
-            if let Some(ref mut child) = self.child {
-                if let Ok(Some(exit)) = child.try_wait() {
-                    self.child = None;
-                    // Another instance may have won the race and bound the port.
-                    if let Ok(Some(health)) = self.probe_health() {
-                        if health.ok && health.config_id.as_deref() == Some(&self.config_id) {
-                            self.mode = "attached".to_string();
-                            self.last_error = None;
-                            return self.status_snapshot(Some(health));
-                        }
+
+            let exited = self
+                .state
+                .lock()
+                .ok()
+                .and_then(|mut s| match s.child.as_mut()?.try_wait() {
+                    Ok(Some(status)) => {
+                        s.child = None;
+                        Some(status)
                     }
-                    self.mode = "error".to_string();
-                    self.last_error = Some(format!(
+                    _ => None,
+                });
+
+            if let Some(exit) = exited {
+                if let Ok(Some(health)) = self.probe_health() {
+                    if health.ok && health.config_id.as_deref() == Some(&self.config_id) {
+                        if let Ok(mut s) = self.state.lock() {
+                            s.mode = "attached".to_string();
+                            s.last_error = None;
+                            s.backend_version = health.app_version.clone();
+                            s.version_mismatch =
+                                health.app_version.as_deref() != Some(env!("CARGO_PKG_VERSION"));
+                        }
+                        return self.status_snapshot(Some(health));
+                    }
+                }
+                if let Ok(mut s) = self.state.lock() {
+                    s.mode = "error".to_string();
+                    s.last_error = Some(format!(
                         "Axiom backend exited early ({exit}). Inspect .state/runtime-{}/server.log.",
                         self.config_id
                     ));
-                    return self.status_snapshot(None);
                 }
+                return self.status_snapshot(None);
             }
             std::thread::sleep(Duration::from_millis(200));
         }
 
-        self.mode = "error".to_string();
-        self.last_error = Some(format!(
-            "Timed out waiting for Axiom backend on 127.0.0.1:{}.",
-            self.port
-        ));
+        if let Ok(mut s) = self.state.lock() {
+            s.mode = "error".to_string();
+            s.last_error = Some(format!(
+                "Timed out waiting for Axiom backend on 127.0.0.1:{}.",
+                self.port
+            ));
+        }
         self.status_snapshot(None)
     }
 
-    pub fn current_status(&mut self) -> BackendStatus {
-        if let Some(ref mut child) = self.child {
-            if let Ok(Some(_)) = child.try_wait() {
-                self.child = None;
+    pub fn current_status(&self) -> BackendStatus {
+        let has_child = if let Ok(mut s) = self.state.lock() {
+            if let Some(ref mut child) = s.child {
+                if let Ok(Some(_)) = child.try_wait() {
+                    s.child = None;
+                }
             }
-        }
+            s.child.is_some()
+        } else {
+            false
+        };
+
         match self.probe_health() {
             Ok(Some(health)) if health.ok => {
-                self.last_error = None;
-                if self.child.is_none() && self.mode != "attached" {
-                    self.mode = "attached".to_string();
+                if let Ok(mut s) = self.state.lock() {
+                    if !has_child && s.mode != "attached" {
+                        s.mode = "attached".to_string();
+                    }
+                    s.backend_version = health.app_version.clone();
+                    let mismatch =
+                        !has_child && health.app_version.as_deref() != Some(env!("CARGO_PKG_VERSION"));
+                    s.version_mismatch = mismatch;
+                    if !mismatch {
+                        s.last_error = None;
+                    }
                 }
                 self.status_snapshot(Some(health))
             }
@@ -456,14 +600,17 @@ impl BackendManager {
         }
     }
 
-    pub fn restart(&mut self) -> BackendStatus {
-        if let Some(mut child) = self.child.take() {
+    pub fn restart(&self, takeover: bool) -> BackendStatus {
+        let taken_child = self.state.lock().ok().and_then(|mut s| s.child.take());
+        if let Some(mut child) = taken_child {
             let _ = child.kill();
             let _ = child.wait();
-        } else if let Err(err) = self.restart_attached_via_script() {
-            self.mode = "error".to_string();
-            self.last_error = Some(err);
+        } else if let Err(err) = self.restart_attached_via_script(takeover) {
             let snapshot_health = self.probe_health().ok().flatten();
+            if let Ok(mut s) = self.state.lock() {
+                s.mode = "error".to_string();
+                s.last_error = Some(err);
+            }
             return self.status_snapshot(snapshot_health);
         }
         self.ensure_running()
@@ -472,7 +619,7 @@ impl BackendManager {
     pub fn trigger_backup(&self) -> Result<String, String> {
         let base = self.base_url();
         let session_resp = self
-            .client
+            .health_client
             .get(format!("{base}/api/editor-session"))
             .send()
             .map_err(|e| format!("Failed to fetch editor session: {e}"))?;
@@ -484,7 +631,7 @@ impl BackendManager {
             .and_then(|t| t.as_str())
             .ok_or_else(|| "Missing CSRF token.".to_string())?;
         let resp = self
-            .client
+            .backup_client
             .post(format!("{base}/api/recovery/backup"))
             .header("Origin", &base)
             .header("Content-Type", "application/json")
@@ -500,16 +647,40 @@ impl BackendManager {
         Ok(body)
     }
 
-    pub fn shutdown_if_spawned(&mut self) {
-        if let Some(mut child) = self.child.take() {
+    pub fn shutdown_if_spawned(&self) {
+        let taken_child = self.state.lock().ok().and_then(|mut s| s.child.take());
+        if let Some(mut child) = taken_child {
             let _ = child.kill();
             let _ = child.wait();
         }
     }
 
+    pub fn shutdown_owned_or_app_root_backend(&self) {
+        self.shutdown_if_spawned();
+        if let Some(app_root) = find_app_root() {
+            stop_node_backend_for_root(&app_root);
+        }
+    }
+
     fn status_snapshot(&self, health: Option<HealthResponse>) -> BackendStatus {
+        let (mode, last_error, backend_version, version_mismatch) = self
+            .state
+            .lock()
+            .map(|s| {
+                (
+                    s.mode.clone(),
+                    s.last_error.clone(),
+                    s.backend_version.clone(),
+                    s.version_mismatch,
+                )
+            })
+            .unwrap_or_else(|_| ("error".to_string(), None, None, false));
+        let app_version = health
+            .as_ref()
+            .and_then(|h| h.app_version.clone())
+            .or(backend_version);
         BackendStatus {
-            mode: self.mode.clone(),
+            mode,
             healthy: health.as_ref().is_some_and(|h| h.ok),
             port: self.port,
             base_url: self.base_url(),
@@ -520,7 +691,9 @@ impl BackendManager {
             backup_dir: self.backup_dir.to_string_lossy().into_owned(),
             pid: health.as_ref().and_then(|h| h.pid),
             uptime_seconds: health.as_ref().and_then(|h| h.uptime_seconds),
-            error: self.last_error.clone(),
+            app_version,
+            version_mismatch,
+            error: last_error,
         }
     }
 }
@@ -531,7 +704,6 @@ mod tests {
 
     #[test]
     fn config_id_matches_node_sha256_contract() {
-        // Matches Node: createHash('sha256').update('c:\\private\\axiom\\config.json').digest('hex').slice(0,16).toUpperCase()
         let p = Path::new(r"\\?\C:\Private\Axiom\config.json");
         let stripped = strip_verbatim_prefix(p);
         assert_eq!(stripped.to_string_lossy(), r"C:\Private\Axiom\config.json");

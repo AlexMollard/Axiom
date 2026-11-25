@@ -50,8 +50,8 @@ export async function getBackendStatus() {
   return invokeDesktop('desktop_backend_status');
 }
 
-export async function restartBackend() {
-  return invokeDesktop('desktop_restart_backend');
+export async function restartBackend(takeover = false) {
+  return invokeDesktop('desktop_restart_backend', { takeover });
 }
 
 export async function checkDesktopUpdates() {

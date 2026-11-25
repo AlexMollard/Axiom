@@ -1,6 +1,6 @@
 #requires -Version 7
 [CmdletBinding()]
-param([switch]$Register, [switch]$Unregister, [switch]$Open, [switch]$Restart, [switch]$Health, [switch]$TaskLaunch, [string]$ConfigPath)
+param([switch]$Register, [switch]$Unregister, [switch]$Open, [switch]$Restart, [switch]$TakeOver, [switch]$Health, [switch]$TaskLaunch, [string]$ConfigPath)
 $ErrorActionPreference = 'Stop'
 $root = Split-Path -Parent $PSScriptRoot
 if (-not $ConfigPath) {
@@ -64,14 +64,17 @@ $taskPrefix = '--headless "' + $pwsh + '" '
 # Runtime arguments are fixed before entering the one-shot launcher.
 $user = [Security.Principal.WindowsIdentity]::GetCurrent().Name
 $userSid = [Security.Principal.WindowsIdentity]::GetCurrent().User.Value
-function OwnedTask($name, $expectedExecutable, $expectedArgument, [switch]$AllowLegacy) {
+function OwnedTask($name, $expectedExecutable, $expectedArgument, [switch]$AllowLegacy, [switch]$AllowTakeOver) {
   $task = Get-ScheduledTask -TaskName $name -ErrorAction SilentlyContinue
   if (-not $task) { return $null }
   $legacyArgument = if ($expectedArgument.StartsWith($taskPrefix, [StringComparison]::Ordinal)) { $expectedArgument.Substring($taskPrefix.Length) } else { $null }
   $legacyAction = $AllowLegacy -and (
     ($name -eq $taskName -and $task.Actions[0].Execute -ieq $node -and $task.Actions[0].Arguments -ceq $serverArgument) -or
     ($legacyArgument -and $task.Actions[0].Execute -ieq $pwsh -and $task.Actions[0].Arguments -ceq $legacyArgument))
-  if (@($task.Actions).Count -ne 1 -or (($task.Actions[0].Execute -ine $expectedExecutable -or $task.Actions[0].Arguments -cne $expectedArgument) -and -not $legacyAction)) {
+  $takeOverModeFlag = if ($name -eq $taskName) { '-TaskLaunch' } else { '-Health' }
+  $takeOverPattern = '(?i)^--headless "' + [regex]::Escape($pwsh) + '" -NoProfile -NonInteractive -WindowStyle Hidden -File "[^"\r\n]+[\\/]scripts[\\/]start\.ps1" ' + [regex]::Escape($takeOverModeFlag) + ' -ConfigPath "' + [regex]::Escape($ConfigPath) + '"$'
+  $takeOverAction = $AllowTakeOver -and ($task.Actions[0].Execute -ieq $expectedExecutable) -and ($task.Actions[0].Arguments -match $takeOverPattern)
+  if (@($task.Actions).Count -ne 1 -or (($task.Actions[0].Execute -ine $expectedExecutable -or $task.Actions[0].Arguments -cne $expectedArgument) -and -not $legacyAction -and -not $takeOverAction)) {
     throw "Scheduled task $name is not owned by this Axiom installation."
   }
   [xml]$xml = Export-ScheduledTask -TaskName $name
@@ -88,8 +91,8 @@ function OwnedTask($name, $expectedExecutable, $expectedArgument, [switch]$Allow
 }
 $launchArgument = $taskPrefix + '-NoProfile -NonInteractive -WindowStyle Hidden -File "' + $script + '" -TaskLaunch -ConfigPath ' + $quotedConfig
 $healthArgument = $taskPrefix + '-NoProfile -NonInteractive -WindowStyle Hidden -File "' + $script + '" -Health -ConfigPath ' + $quotedConfig
-$serverTask = OwnedTask $taskName $taskHost $launchArgument -AllowLegacy:$Register
-$healthTask = OwnedTask $healthName $taskHost $healthArgument -AllowLegacy:$Register
+$serverTask = OwnedTask $taskName $taskHost $launchArgument -AllowLegacy:$Register -AllowTakeOver:$TakeOver
+$healthTask = OwnedTask $healthName $taskHost $healthArgument -AllowLegacy:$Register -AllowTakeOver:$TakeOver
 if ($Unregister) {
   foreach ($name in @($healthName, $taskName)) {
     if ($name -eq $taskName) { $existing = $serverTask } else { $existing = $healthTask }
@@ -100,7 +103,7 @@ if ($Unregister) {
 }
 $config = Get-Content -LiteralPath $ConfigPath -Raw | ConvertFrom-Json
 $url = "http://127.0.0.1:$($config.port)"
-if ($Register) {
+if ($Register -or ($TakeOver -and ($serverTask -or $healthTask))) {
   # Use the current interactive account without elevation.
   $principal = New-ScheduledTaskPrincipal -UserId $user -LogonType Interactive -RunLevel Limited
   $settings = New-ScheduledTaskSettingsSet -MultipleInstances IgnoreNew -ExecutionTimeLimit ([TimeSpan]::Zero) -RestartCount 3 -RestartInterval (New-TimeSpan -Minutes 1) -Priority 5 -StartWhenAvailable -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries
@@ -129,7 +132,11 @@ function RuntimeOwner {
   $id = 0
   if (-not [int]::TryParse((Get-Content -LiteralPath $pidFile -Raw).Trim(), [ref]$id) -or $id -le 0) { return $null }
   $process = Get-CimInstance Win32_Process -Filter "ProcessId = $id"
-  $expected = '(?i)(?:^|\s)"?' + [regex]::Escape($server) + '"?\s+"?' + [regex]::Escape($ConfigPath) + '"?\s*$'
+  $expected = if ($TakeOver) {
+    '(?i)(?:^|\s)"?[^"\r\n]*[\\/]src[\\/]server\.mjs"?\s+"?' + [regex]::Escape($ConfigPath) + '"?\s*$'
+  } else {
+    '(?i)(?:^|\s)"?' + [regex]::Escape($server) + '"?\s+"?' + [regex]::Escape($ConfigPath) + '"?\s*$'
+  }
   if (-not $process -or $process.ExecutablePath -ine $node -or -not $process.CommandLine -or $process.CommandLine -notmatch $expected) { return $null }
   return Get-Process -Id $id -ErrorAction SilentlyContinue
 }

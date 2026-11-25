@@ -4,51 +4,142 @@ mod storage;
 mod tray;
 mod updater;
 
-use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+pub use backend::stop_current_dir_node_backend;
+
+use std::collections::{HashMap, HashSet};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
-use tauri::{Emitter, Manager, WebviewUrl, WebviewWindowBuilder, WindowEvent};
+use tauri::{AppHandle, Emitter, Manager, WebviewUrl, WebviewWindow, WebviewWindowBuilder, WindowEvent};
 use tauri_plugin_global_shortcut::{GlobalShortcutExt, ShortcutState};
 
 use backend::{resolve_config_path, BackendManager};
 use storage::{desktop_state_dir, load_prefs, load_window_bounds, save_window_bounds, WindowBounds};
-use tray::{setup_tray, show_main_window, toggle_quick_overlay, update_tray_backend_status, AppRuntime};
+use tray::{
+    setup_tray, show_main_window, toggle_quick_overlay, update_tray_backend_status, AppRuntime,
+};
 
-fn fallback_error_html(error: &str, config_path: &str) -> String {
-    let escaped_err = error
-        .replace('&', "&amp;")
-        .replace('<', "&lt;")
-        .replace('>', "&gt;");
-    let escaped_cfg = config_path
-        .replace('&', "&amp;")
-        .replace('<', "&lt;")
-        .replace('>', "&gt;");
-    format!(
-        r#"<!doctype html>
-<html lang="en">
-<head>
-<meta charset="utf-8">
-<title>Axiom - Startup Error</title>
-<style>
-  body {{ margin: 0; font-family: system-ui, sans-serif; background: #181716; color: #f0ebe6; padding: 48px; line-height: 1.6; }}
-  .card {{ max-width: 640px; margin: 40px auto; background: #211f1e; border: 1px solid #3b3430; border-radius: 14px; padding: 28px; }}
-  h1 {{ margin-top: 0; font-size: 22px; color: #efb99d; }}
-  code {{ display: block; background: #191715; padding: 10px 12px; border-radius: 8px; color: #d0c5bb; overflow-wrap: anywhere; }}
-  .err {{ color: #e2a18f; background: #34231f; border: 1px solid #795442; padding: 12px; border-radius: 8px; }}
-  button {{ margin-top: 16px; padding: 10px 16px; border-radius: 8px; border: 0; background: #d39476; color: #231812; font-weight: 700; cursor: pointer; }}
-</style>
-</head>
-<body>
-  <div class="card">
-    <h1>Axiom could not connect to its local backend</h1>
-    <p class="err">{escaped_err}</p>
-    <p>Configuration path:</p>
-    <code>{escaped_cfg}</code>
-    <button onclick="location.reload()">Retry</button>
-  </div>
-</body>
-</html>"#
+fn compute_window_bounds(win: &WebviewWindow, state: &AppRuntime) -> Option<WindowBounds> {
+    if win.is_minimized().unwrap_or(false) {
+        return None;
+    }
+    let maximized = win.is_maximized().unwrap_or(false);
+    let scale = win.scale_factor().unwrap_or(1.0);
+    let pos = win.outer_position().ok()?;
+    let size = win.inner_size().ok()?;
+    let logical = size.to_logical::<f64>(scale);
+    if logical.width < 860.0 || logical.height < 560.0 {
+        return None;
+    }
+    if maximized {
+        let prev = state
+            .pending_bounds
+            .lock()
+            .ok()
+            .and_then(|g| g.clone())
+            .or_else(|| load_window_bounds(&state.state_dir));
+        if let Some(prev) = prev {
+            return Some(WindowBounds {
+                x: prev.x,
+                y: prev.y,
+                width: prev.width,
+                height: prev.height,
+                maximized: true,
+            });
+        }
+    }
+    Some(WindowBounds {
+        x: pos.x,
+        y: pos.y,
+        width: size.width,
+        height: size.height,
+        maximized,
+    })
+}
+
+fn schedule_bounds_save(app: &AppHandle, win: &WebviewWindow) {
+    let state = app.state::<AppRuntime>();
+    let Some(bounds) = compute_window_bounds(win, &state) else {
+        return;
+    };
+    if let Ok(mut pending) = state.pending_bounds.lock() {
+        *pending = Some(bounds);
+    }
+    let seq = state.bounds_seq.fetch_add(1, Ordering::SeqCst) + 1;
+    let handle = app.clone();
+    tauri::async_runtime::spawn(async move {
+        tokio::time::sleep(Duration::from_millis(400)).await;
+        let state = handle.state::<AppRuntime>();
+        if state.bounds_seq.load(Ordering::SeqCst) != seq {
+            return;
+        }
+        let snapshot = state.pending_bounds.lock().ok().and_then(|g| g.clone());
+        if let Some(bounds) = snapshot {
+            let state_dir = state.state_dir.clone();
+            let _ = tauri::async_runtime::spawn_blocking(move || {
+                let _ = save_window_bounds(&state_dir, &bounds);
+            })
+            .await;
+        }
+    });
+}
+
+fn flush_bounds_now(app: &AppHandle, win: Option<&WebviewWindow>) {
+    let state = app.state::<AppRuntime>();
+    if let Some(w) = win {
+        if let Some(bounds) = compute_window_bounds(w, &state) {
+            if let Ok(mut pending) = state.pending_bounds.lock() {
+                *pending = Some(bounds);
+            }
+        }
+    }
+    state.bounds_seq.fetch_add(1, Ordering::SeqCst);
+    let snapshot = state.pending_bounds.lock().ok().and_then(|g| g.clone());
+    if let Some(bounds) = snapshot {
+        let _ = save_window_bounds(&state.state_dir, &bounds);
+    }
+}
+
+fn ensure_quick_capture_window(app: &AppHandle, base_url: &str) {
+    if app.get_webview_window("quick-capture").is_some() {
+        return;
+    }
+    let Ok(quick_url) = format!("{base_url}/?desktopMode=quick").parse::<url::Url>() else {
+        return;
+    };
+    let mut quick_builder = WebviewWindowBuilder::new(
+        app,
+        "quick-capture",
+        WebviewUrl::External(quick_url),
     )
+    .title("Axiom Quick")
+    .inner_size(780.0, 500.0)
+    .resizable(false)
+    .decorations(false)
+    .always_on_top(true)
+    .skip_taskbar(true)
+    .visible(false)
+    .background_color(tauri::window::Color(0x18, 0x17, 0x16, 0xff));
+    if let Ok(icon) = tauri::image::Image::from_bytes(include_bytes!("../icons/128x128.png")) {
+        if let Ok(with_icon) = quick_builder.icon(icon) {
+            quick_builder = with_icon;
+        } else {
+            return;
+        }
+    }
+    if let Ok(quick_win) = quick_builder.build() {
+        let quick_handle = quick_win.clone();
+        quick_win.on_window_event(move |event| match event {
+            WindowEvent::CloseRequested { api, .. } => {
+                api.prevent_close();
+                let _ = quick_handle.hide();
+            }
+            WindowEvent::Focused(false) => {
+                let _ = quick_handle.hide();
+            }
+            _ => {}
+        });
+    }
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -99,7 +190,7 @@ pub fn run() {
                 .map_err(|e| std::io::Error::new(std::io::ErrorKind::NotFound, e))?;
             let state_dir = desktop_state_dir(&config_path);
             let prefs = load_prefs(&state_dir);
-            let mut manager = BackendManager::new(config_path.clone())
+            let manager = BackendManager::new(config_path.clone())
                 .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
             let status = manager.ensure_running();
 
@@ -110,15 +201,21 @@ pub fn run() {
             };
 
             let saved_bounds = load_window_bounds(&state_dir);
-            let state_dir_for_events = state_dir.clone();
+            let initial_deferred_max =
+                prefs.start_minimized && saved_bounds.as_ref().is_some_and(|b| b.maximized);
             app.manage(AppRuntime {
-                backend: Arc::new(Mutex::new(manager)),
+                backend: Arc::new(manager),
                 state_dir,
                 prefs: Mutex::new(prefs.clone()),
-                dirty_tabs: AtomicUsize::new(0),
+                dirty_tabs: Mutex::new(HashMap::new()),
                 quitting: AtomicBool::new(false),
+                update_in_flight: AtomicBool::new(false),
+                deferred_maximize: AtomicBool::new(initial_deferred_max),
                 tray: Mutex::new(None),
                 pending_update: Mutex::new(None),
+                saved_files: Mutex::new(HashSet::new()),
+                pending_bounds: Mutex::new(saved_bounds.clone()),
+                bounds_seq: AtomicU64::new(0),
             });
 
             if let Err(err) = setup_tray(app.handle(), &status_label) {
@@ -136,18 +233,7 @@ pub fn run() {
                     .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidInput, e))?;
                 WebviewUrl::External(parsed)
             } else {
-                let html = fallback_error_html(
-                    status.error.as_deref().unwrap_or("Unknown error"),
-                    &status.config_path,
-                );
-                let data_url = format!(
-                    "data:text/html;charset=utf-8,{}",
-                    urlencoding::encode(&html)
-                );
-                let parsed: url::Url = data_url
-                    .parse()
-                    .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidInput, e))?;
-                WebviewUrl::External(parsed)
+                WebviewUrl::App("index.html".into())
             };
 
             let mut main_builder = WebviewWindowBuilder::new(app, "main", main_url)
@@ -163,7 +249,10 @@ pub fn run() {
             let main_win = main_builder.build()?;
 
             if let Some(bounds) = saved_bounds {
-                if bounds.width >= 860 && bounds.height >= 560 {
+                let scale = main_win.scale_factor().unwrap_or(1.0);
+                let logical_w = bounds.width as f64 / scale;
+                let logical_h = bounds.height as f64 / scale;
+                if logical_w >= 860.0 && logical_h >= 560.0 {
                     let monitors = main_win.available_monitors().unwrap_or_default();
                     let visible_on_monitor = monitors.iter().any(|m| {
                         let pos = m.position();
@@ -182,7 +271,7 @@ pub fn run() {
                         let _ = main_win.set_size(tauri::Size::Physical(
                             tauri::PhysicalSize::new(bounds.width, bounds.height),
                         ));
-                        if bounds.maximized {
+                        if bounds.maximized && !prefs.start_minimized {
                             let _ = main_win.maximize();
                         }
                     }
@@ -192,50 +281,15 @@ pub fn run() {
                 let _ = main_win.show();
             }
 
-            let handle_for_close = app.handle().clone();
-            let main_win_for_bounds = main_win.clone();
-            let persist_bounds = move || {
-                let minimized = main_win_for_bounds.is_minimized().unwrap_or(false);
-                if minimized {
-                    return;
-                }
-                let maximized = main_win_for_bounds.is_maximized().unwrap_or(false);
-                if let (Ok(pos), Ok(size)) = (
-                    main_win_for_bounds.outer_position(),
-                    main_win_for_bounds.inner_size(),
-                ) {
-                    if size.width >= 860 && size.height >= 560 {
-                        let existing = load_window_bounds(&state_dir_for_events);
-                        let (x, y, width, height) = if maximized {
-                            if let Some(prev) = existing {
-                                (prev.x, prev.y, prev.width, prev.height)
-                            } else {
-                                (pos.x, pos.y, size.width, size.height)
-                            }
-                        } else {
-                            (pos.x, pos.y, size.width, size.height)
-                        };
-                        let _ = save_window_bounds(
-                            &state_dir_for_events,
-                            &WindowBounds {
-                                x,
-                                y,
-                                width,
-                                height,
-                                maximized,
-                            },
-                        );
-                    }
-                }
-            };
-
+            let handle_for_events = app.handle().clone();
+            let main_win_for_events = main_win.clone();
             main_win.on_window_event(move |event| match event {
                 WindowEvent::Resized(_) | WindowEvent::Moved(_) => {
-                    persist_bounds();
+                    schedule_bounds_save(&handle_for_events, &main_win_for_events);
                 }
                 WindowEvent::CloseRequested { api, .. } => {
-                    persist_bounds();
-                    let state = handle_for_close.state::<AppRuntime>();
+                    flush_bounds_now(&handle_for_events, Some(&main_win_for_events));
+                    let state = handle_for_events.state::<AppRuntime>();
                     if state.quitting.load(Ordering::SeqCst) {
                         return;
                     }
@@ -246,56 +300,24 @@ pub fn run() {
                         .unwrap_or(true);
                     if close_to_tray {
                         api.prevent_close();
-                        if let Some(w) = handle_for_close.get_webview_window("main") {
+                        if let Some(w) = handle_for_events.get_webview_window("main") {
                             let _ = w.hide();
                         }
                         return;
                     }
-                    if state.dirty_tabs.load(Ordering::SeqCst) > 0 {
+                    if state.total_dirty_tabs() > 0 {
                         api.prevent_close();
-                        let _ = handle_for_close.emit_to("main", "axiom://confirm-close", ());
+                        let _ = handle_for_events.emit_to("main", "axiom://confirm-close", ());
                         return;
                     }
                     state.quitting.store(true, Ordering::SeqCst);
-                    if let Ok(mut backend) = state.backend.lock() {
-                        backend.shutdown_if_spawned();
-                    };
+                    state.backend.shutdown_if_spawned();
                 }
                 _ => {}
             });
 
             if status.healthy {
-                let quick_url: url::Url = format!("{base_url}/?desktopMode=quick")
-                    .parse()
-                    .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidInput, e))?;
-                let mut quick_builder = WebviewWindowBuilder::new(
-                    app,
-                    "quick-capture",
-                    WebviewUrl::External(quick_url),
-                )
-                .title("Axiom Quick")
-                .inner_size(780.0, 500.0)
-                .resizable(false)
-                .decorations(false)
-                .always_on_top(true)
-                .skip_taskbar(true)
-                .visible(false)
-                .background_color(tauri::window::Color(0x18, 0x17, 0x16, 0xff));
-                if let Ok(icon) = tauri::image::Image::from_bytes(include_bytes!("../icons/128x128.png")) {
-                    quick_builder = quick_builder.icon(icon)?;
-                }
-                let quick_win = quick_builder.build()?;
-                let quick_handle = quick_win.clone();
-                quick_win.on_window_event(move |event| match event {
-                    WindowEvent::CloseRequested { api, .. } => {
-                        api.prevent_close();
-                        let _ = quick_handle.hide();
-                    }
-                    WindowEvent::Focused(false) => {
-                        let _ = quick_handle.hide();
-                    }
-                    _ => {}
-                });
+                ensure_quick_capture_window(app.handle(), &base_url);
             }
 
             let monitor_handle = app.handle().clone();
@@ -308,17 +330,26 @@ pub fn run() {
                         break;
                     }
                     let backend_arc = Arc::clone(&state.backend);
-                    let next = tauri::async_runtime::spawn_blocking(move || {
-                        if let Ok(mut backend) = backend_arc.lock() {
-                            Some(backend.current_status())
-                        } else {
-                            None
-                        }
-                    })
-                    .await
-                    .ok()
-                    .flatten();
+                    let next = tauri::async_runtime::spawn_blocking(move || backend_arc.current_status())
+                        .await
+                        .ok();
                     if let Some(next) = next {
+                        if next.healthy {
+                            ensure_quick_capture_window(&monitor_handle, &next.base_url);
+                            if !prev_healthy {
+                                if let Some(main_win) = monitor_handle.get_webview_window("main") {
+                                    if let Ok(url) = main_win.url() {
+                                        if url.host_str() != Some("127.0.0.1")
+                                            && url.host_str() != Some("localhost")
+                                        {
+                                            if let Ok(target) = format!("{}/", next.base_url).parse() {
+                                                let _ = main_win.navigate(target);
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
                         if next.healthy != prev_healthy {
                             prev_healthy = next.healthy;
                             update_tray_backend_status(&monitor_handle, &next);
@@ -353,11 +384,10 @@ pub fn run() {
         .expect("error while building Axiom desktop application")
         .run(|app, event| {
             if let tauri::RunEvent::Exit = event {
+                flush_bounds_now(app, None);
                 let state = app.state::<AppRuntime>();
                 state.quitting.store(true, Ordering::SeqCst);
-                if let Ok(mut backend) = state.backend.lock() {
-                    backend.shutdown_if_spawned();
-                };
+                state.backend.shutdown_if_spawned();
             }
         });
 }
