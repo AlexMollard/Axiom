@@ -190,12 +190,15 @@ pub fn forwarded_restart_args() -> Vec<String> {
     out
 }
 
-pub fn download_and_prepare_update(update_info: &UpdateInfo) -> Result<(), String> {
+pub fn download_and_prepare_update(
+    update_info: &UpdateInfo,
+    progress: Option<std::sync::mpsc::Sender<i16>>,
+) -> Result<(), String> {
     let feed = resolve_update_feed();
     let manager = create_manager_for_feed(&feed)
         .map_err(|e| format!("Velopack update manager unavailable: {e}"))?;
     manager
-        .download_updates(update_info, None)
+        .download_updates(update_info, progress)
         .map_err(|e| format!("Failed to download update: {e}"))?;
     let restart_args = forwarded_restart_args();
     manager

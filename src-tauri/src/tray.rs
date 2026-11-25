@@ -269,6 +269,7 @@ pub fn update_tray_review_count(app: &AppHandle, pending_count: usize, unread_co
         };
         let _ = tray.set_tooltip(Some(tip));
     }
+    crate::win_native::update_taskbar_badge(app, pending_count);
 }
 
 pub fn update_tray_backend_status(app: &AppHandle, status: &crate::backend::BackendStatus) {

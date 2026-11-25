@@ -408,6 +408,8 @@ pub async fn desktop_open_note_window(
     let detached_win = builder
         .build()
         .map_err(|e| format!("Could not open detached window: {e}"))?;
+    crate::win_native::apply_win11_window_polish(&detached_win);
+    crate::win_native::attach_webview_crash_recovery(&detached_win, target);
     let app_for_detached = app.clone();
     let label_for_detached = label.clone();
     detached_win.on_window_event(move |event| match event {
@@ -487,6 +489,14 @@ pub async fn desktop_check_updates(
 }
 
 #[tauri::command]
+pub fn desktop_open_snap_layouts(window: tauri::WebviewWindow) -> Result<(), String> {
+    if window.is_focused().unwrap_or(false) {
+        crate::win_native::trigger_snap_layouts();
+    }
+    Ok(())
+}
+
+#[tauri::command]
 pub async fn desktop_install_update(
     app: AppHandle,
     state: State<'_, AppRuntime>,
@@ -531,13 +541,26 @@ pub async fn desktop_install_update(
         }
     };
 
-    if let Err(err) = tauri::async_runtime::spawn_blocking(move || {
-        crate::updater::download_and_prepare_update(&info)
+    let (tx, rx) = std::sync::mpsc::channel::<i16>();
+    let progress_app = app.clone();
+    std::thread::spawn(move || {
+        while let Ok(pct) = rx.recv() {
+            let clamped = pct.clamp(0, 100);
+            crate::win_native::set_taskbar_progress(&progress_app, Some(clamped as u64));
+            let _ = progress_app.emit_to("main", "axiom://update-progress", clamped);
+        }
+    });
+
+    let download_result = tauri::async_runtime::spawn_blocking(move || {
+        crate::updater::download_and_prepare_update(&info, Some(tx))
     })
     .await
     .map_err(|e| format!("Update install task failed: {e}"))
-    .and_then(|inner| inner)
-    {
+    .and_then(|inner| inner);
+
+    crate::win_native::set_taskbar_progress(&app, None);
+
+    if let Err(err) = download_result {
         state.update_in_flight.store(false, Ordering::SeqCst);
         return Err(err);
     }

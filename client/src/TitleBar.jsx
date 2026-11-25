@@ -12,7 +12,7 @@ import {
   X,
   Zap,
 } from 'lucide-react';
-import { getCurrentDesktopWindow, isDesktop } from './desktop-bridge.mjs';
+import { getCurrentDesktopWindow, isDesktop, openSnapLayouts } from './desktop-bridge.mjs';
 import { AXIOM_ICON_DATA_URI } from './axiom-icon.mjs';
 import './DesktopChrome.css';
 
@@ -40,6 +40,9 @@ export default function TitleBar({
   const [menuState, setMenuState] = useState(null);
   const menuRef = useRef(null);
   const tabRefs = useRef({});
+  const snapTimerRef = useRef(null);
+
+  useEffect(() => () => clearTimeout(snapTimerRef.current), []);
 
   useEffect(() => {
     tabRefs.current[activeId]?.scrollIntoView({ block: 'nearest', inline: 'nearest' });
@@ -262,7 +265,29 @@ export default function TitleBar({
         <button type="button" className="titlebar-btn" onClick={event => { event.currentTarget.blur(); act(w => w.minimize()); }} title="Minimize" aria-label="Minimize window">
           <Minus size={14} aria-hidden="true" />
         </button>
-        <button type="button" className="titlebar-btn" onClick={event => { event.currentTarget.blur(); act(w => w.toggleMaximize()); }} title={maximized ? 'Restore' : 'Maximize'} aria-label={maximized ? 'Restore window' : 'Maximize window'}>
+        <button
+          type="button"
+          className="titlebar-btn"
+          onClick={event => {
+            clearTimeout(snapTimerRef.current);
+            event.currentTarget.blur();
+            act(w => w.toggleMaximize());
+          }}
+          onContextMenu={event => {
+            event.preventDefault();
+            clearTimeout(snapTimerRef.current);
+            openSnapLayouts();
+          }}
+          onMouseEnter={() => {
+            clearTimeout(snapTimerRef.current);
+            snapTimerRef.current = setTimeout(() => {
+              if (document.hasFocus()) openSnapLayouts();
+            }, 600);
+          }}
+          onMouseLeave={() => clearTimeout(snapTimerRef.current)}
+          title={maximized ? 'Restore (Right-click or Win+Z for Snap Layouts)' : 'Maximize (Right-click or Win+Z for Snap Layouts)'}
+          aria-label={maximized ? 'Restore window' : 'Maximize window'}
+        >
           {maximized ? <Copy size={12} aria-hidden="true" /> : <Square size={12} aria-hidden="true" />}
         </button>
         <button type="button" className="titlebar-btn titlebar-btn-close" onClick={event => { event.currentTarget.blur(); act(w => w.close()); }} title="Close" aria-label="Close window">

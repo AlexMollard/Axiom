@@ -4,6 +4,7 @@ import {
   checkDesktopUpdates,
   getDesktopInfo,
   installDesktopUpdate,
+  listenDesktop,
   openInBrowser,
   quitDesktop,
   restartBackend,
@@ -28,12 +29,34 @@ export default function DesktopSettings({
   const [busy, setBusy] = useState(false);
   const [checkingUpdate, setCheckingUpdate] = useState(false);
   const [installingUpdate, setInstallingUpdate] = useState(false);
+  const [downloadPercent, setDownloadPercent] = useState(null);
   const [updateInfo, setUpdateInfo] = useState(pendingUpdate || null);
   const [status, setStatus] = useState(null);
 
   useEffect(() => {
     if (pendingUpdate) setUpdateInfo(pendingUpdate);
   }, [pendingUpdate]);
+
+  useEffect(() => {
+    if (!open) {
+      setDownloadPercent(null);
+      return;
+    }
+    let active = true;
+    let unlisten = null;
+    listenDesktop('axiom://update-progress', event => {
+      if (!active) return;
+      const pct = Number(event.payload);
+      if (Number.isFinite(pct)) setDownloadPercent(pct);
+    }).then(fn => {
+      if (active) unlisten = fn;
+      else fn?.();
+    });
+    return () => {
+      active = false;
+      unlisten?.();
+    };
+  }, [open]);
 
   useEffect(() => {
     const dialog = dialogRef.current;
@@ -125,6 +148,7 @@ export default function DesktopSettings({
     } catch (e) {
       setStatus({ text: e.message || 'Could not install update.', error: true });
       setInstallingUpdate(false);
+      setDownloadPercent(null);
     }
   };
 
@@ -254,7 +278,9 @@ export default function DesktopSettings({
                   </button>
                   {updateInfo?.available && (
                     <button type="button" className="button button-primary" disabled={installingUpdate} onClick={doInstallUpdate}>
-                      {installingUpdate ? 'Downloading & restarting...' : `Download & restart (v${updateInfo.targetVersion})`}
+                      {installingUpdate
+                        ? (downloadPercent !== null ? `Downloading update (${downloadPercent}%)...` : 'Downloading & restarting...')
+                        : `Download & restart (v${updateInfo.targetVersion})`}
                     </button>
                   )}
                 </div>

@@ -232,6 +232,8 @@ dependencies = [
  "url",
  "urlencoding",
  "velopack",
+ "webview2-com",
+ "windows",
  "windows-sys 0.61.2",
 ]
 

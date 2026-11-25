@@ -161,6 +161,10 @@ export async function quitDesktop() {
   return invokeDesktop('desktop_quit');
 }
 
+export async function openSnapLayouts() {
+  return invokeDesktop('desktop_open_snap_layouts');
+}
+
 let cachedCsrfToken = '';
 
 export async function fetchCsrfToken(forceRefresh = false) {

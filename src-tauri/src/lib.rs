@@ -3,8 +3,10 @@ mod commands;
 mod storage;
 mod tray;
 mod updater;
+mod win_native;
 
 pub use backend::stop_current_dir_node_backend;
+pub use win_native::{register_protocol_handler, unregister_protocol_handler};
 
 use std::collections::{HashMap, HashSet};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
@@ -128,6 +130,8 @@ fn ensure_quick_capture_window(app: &AppHandle, base_url: &str) {
         }
     }
     if let Ok(quick_win) = quick_builder.build() {
+        win_native::apply_win11_window_polish(&quick_win);
+        win_native::attach_webview_crash_recovery(&quick_win, format!("{base_url}/?desktopMode=quick"));
         let quick_handle = quick_win.clone();
         quick_win.on_window_event(move |event| match event {
             WindowEvent::CloseRequested { api, .. } => {
@@ -142,11 +146,19 @@ fn ensure_quick_capture_window(app: &AppHandle, base_url: &str) {
     }
 }
 
+fn dispatch_launch_action(app: &AppHandle, action: Option<win_native::DeepLinkAction>) {
+    match action {
+        Some(win_native::DeepLinkAction::ToggleQuick) => toggle_quick_overlay(app),
+        Some(win_native::DeepLinkAction::Route(route)) => tray::navigate_main(app, &route),
+        None => show_main_window(app),
+    }
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
-        .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
-            show_main_window(app);
+        .plugin(tauri_plugin_single_instance::init(|app, args, _cwd| {
+            dispatch_launch_action(app, win_native::parse_launch_action(&args));
         }))
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_notification::init())
@@ -184,8 +196,14 @@ pub fn run() {
             commands::desktop_quit,
             commands::desktop_check_updates,
             commands::desktop_install_update,
+            commands::desktop_open_snap_layouts,
         ])
         .setup(|app| {
+            tauri::async_runtime::spawn_blocking(|| {
+                win_native::register_protocol_handler();
+                win_native::setup_jump_list();
+            });
+
             let config_path = resolve_config_path(None)
                 .map_err(|e| std::io::Error::new(std::io::ErrorKind::NotFound, e))?;
             let state_dir = desktop_state_dir(&config_path);
@@ -201,8 +219,12 @@ pub fn run() {
             };
 
             let saved_bounds = load_window_bounds(&state_dir);
-            let initial_deferred_max =
-                prefs.start_minimized && saved_bounds.as_ref().is_some_and(|b| b.maximized);
+            let initial_args: Vec<String> = std::env::args().collect();
+            let initial_action = win_native::parse_launch_action(&initial_args);
+            let force_show_main = matches!(initial_action, Some(win_native::DeepLinkAction::Route(_)));
+            let initial_deferred_max = !force_show_main
+                && prefs.start_minimized
+                && saved_bounds.as_ref().is_some_and(|b| b.maximized);
             app.manage(AppRuntime {
                 backend: Arc::new(manager),
                 state_dir,
@@ -227,8 +249,12 @@ pub fn run() {
             }
 
             let base_url = status.base_url.clone();
+            let initial_route = match &initial_action {
+                Some(win_native::DeepLinkAction::Route(route)) => route.as_str(),
+                _ => "/",
+            };
             let main_url = if status.healthy {
-                let parsed: url::Url = format!("{base_url}/")
+                let parsed: url::Url = format!("{base_url}{initial_route}")
                     .parse()
                     .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidInput, e))?;
                 WebviewUrl::External(parsed)
@@ -247,6 +273,8 @@ pub fn run() {
                 main_builder = main_builder.icon(icon)?;
             }
             let main_win = main_builder.build()?;
+            win_native::apply_win11_window_polish(&main_win);
+            win_native::attach_webview_crash_recovery(&main_win, format!("{base_url}/"));
 
             if let Some(bounds) = saved_bounds {
                 let scale = main_win.scale_factor().unwrap_or(1.0);
@@ -271,13 +299,13 @@ pub fn run() {
                         let _ = main_win.set_size(tauri::Size::Physical(
                             tauri::PhysicalSize::new(bounds.width, bounds.height),
                         ));
-                        if bounds.maximized && !prefs.start_minimized {
+                        if bounds.maximized && (!prefs.start_minimized || force_show_main) {
                             let _ = main_win.maximize();
                         }
                     }
                 }
             }
-            if !prefs.start_minimized {
+            if !prefs.start_minimized || force_show_main {
                 let _ = main_win.show();
             }
 
@@ -318,6 +346,9 @@ pub fn run() {
 
             if status.healthy {
                 ensure_quick_capture_window(app.handle(), &base_url);
+                if matches!(initial_action, Some(win_native::DeepLinkAction::ToggleQuick)) {
+                    toggle_quick_overlay(app.handle());
+                }
             }
 
             let monitor_handle = app.handle().clone();
