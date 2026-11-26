@@ -399,7 +399,7 @@ pub async fn desktop_open_note_window(
         .inner_size(1120.0, 780.0)
         .min_inner_size(640.0, 440.0)
         .decorations(false)
-        .background_color(tauri::window::Color(0x18, 0x17, 0x16, 0xff));
+        .background_color(tauri::window::Color(0x16, 0x16, 0x16, 0xff));
     if let Ok(icon) = tauri::image::Image::from_bytes(include_bytes!("../icons/128x128.png")) {
         builder = builder
             .icon(icon)
