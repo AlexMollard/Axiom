@@ -6,6 +6,10 @@
 
 Axiom is a native Windows app that brings personal notes, project decisions and coding-agent memory into one place. Write and review in the desktop app, keep working in Obsidian, and give connected agents relevant context without handing them ownership of your notes.
 
+<p align="center"><a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-blue.svg" alt="MIT license"></a></p>
+
+> **Windows only.** Axiom is a Windows 11 desktop app (WebView2). There are no macOS or Linux builds.
+
 [Download the latest release](https://github.com/AlexMollard/Axiom/releases/latest) · [Get started](docs/getting-started.md) · [Explore the docs](#documentation)
 
 ![The Axiom desktop app: custom title bar with tabs, a sidebar of workspaces, the overview dashboard with recent agent findings, pinned notes and a review queue](docs/assets/overview.png)
@@ -43,17 +47,21 @@ This is one vault with clear responsibilities, not a second generated knowledge 
 
 ## Get started
 
-Axiom runs on **Windows 11 with Node.js 22.13+ and PowerShell 7**. Bun and omp are only needed for the omp integration.
+### Use it
 
-1. **[Set up Axiom](docs/getting-started.md).** Build the checkout, choose private vault and backup locations, and write your owner policies.
-2. **Start the local backend** and register it to run hidden at sign-in:
+1. Download `AxiomDesktop-win-Setup.exe` from the [latest release](https://github.com/AlexMollard/Axiom/releases/latest) and run it, then open **Axiom** from the Start menu.
+2. **[Set up Axiom](docs/getting-started.md)**: the backend needs **Node.js 22.13+ and PowerShell 7**. Choose private vault and backup locations and write your owner policies.
+3. **Start the local backend** and register it to run hidden at sign-in:
 
    ```powershell
    ./scripts/start.ps1 -Register
    ```
 
-3. **Install the desktop app** by running `AxiomDesktop-win-Setup.exe` from the [latest release](https://github.com/AlexMollard/Axiom/releases/latest), then open **Axiom** from the Start menu.
-4. **[Connect your agents](docs/getting-started.md#optional-agent-integrations)** if you want native memory integration.
+4. **[Connect your agents](docs/getting-started.md#optional-agent-integrations)** if you want native memory integration. Bun and omp are only needed for the omp integration.
+
+### Build from source
+
+Clone the repository and follow [Development](docs/development.md#build-from-source) for prerequisites (Node, Rust with MSVC, WebView2, PowerShell 7 and the packaging tools), build and test commands, and [forking notes](docs/development.md#forking). Contributions are welcome; see [CONTRIBUTING.md](CONTRIBUTING.md).
 
 The backend powers the desktop app, the `axiom-memory` CLI and the MCP server. It serves the interface only to the desktop app; opening its address in a browser shows a short notice instead. Semantic models are not required or loaded by default, and Axiom is not a full replacement for Obsidian or its plugin ecosystem.
 
@@ -77,3 +85,7 @@ The backend powers the desktop app, the `axiom-memory` CLI and the MCP server. I
 | [Development](docs/development.md) | Run local development, find the relevant source, verify changes and understand performance trade-offs. |
 
 Notes remain yours; backups are local unless you arrange independent copies.
+
+## License
+
+MIT, see [LICENSE](LICENSE). To report a vulnerability, see [SECURITY.md](SECURITY.md).

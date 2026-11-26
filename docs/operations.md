@@ -26,12 +26,6 @@ Use the same selected configuration when managing its tasks. `-Unregister` remov
 
 The integration installer saves an installation report and rollback copies under the configured backup directory's `installation` folder. Use those copies to restore the previous Claude settings and omp wrapper if rolling back, taking care not to overwrite unrelated changes made since installation. When moving the application, use the installer's `--previous-root` option as described in [getting started](getting-started.md#optional-agent-integrations).
 
-### Upgrading from the earlier flat layout
-
-Before replacing an old checkout, use its `./start.ps1 -Unregister` to retire the verified old task actions, then stop only its verified backend: match the `/health` PID to the Node executable, old server path and selected configuration. Unregistering alone does not stop Node. After updating, relink the CLI with `npm link --ignore-scripts` and register `./scripts/start.ps1 -Register`. The command name stays `axiom-memory`, but its target is now `src/memory.mjs`.
-
-If npm reports `EEXIST` for an old CLI shim, inspect and back up that shim and verify that the linked package targets this checkout before removing the obsolete owned shim and relinking. Do not force-overwrite an unrelated command. Restart existing harness sessions to replace cached modules. Native hook and extension paths remain under `integrations/`; private configuration, vault and state do not move.
-
 ## Private state and logs
 
 The index, usage database and harness observations live in `.state` beside the selected configuration, not in the checkout. Runtime PID, recovery counters and bounded application, health and launcher logs are isolated under `.state/runtime-<canonical-config-hash>/`, so distinct configuration files cannot overwrite one another's runtime ownership. Each of the three logs is bounded to 1 MiB. Native warnings remain enabled and are also recorded in the application log. Treat this state as private alongside the configuration, vault and backups.

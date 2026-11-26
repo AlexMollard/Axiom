@@ -16,7 +16,7 @@ npm link --ignore-scripts
 
 ## Private configuration and vault
 
-Axiom normally reads `%LOCALAPPDATA%/Axiom/config.json`; if `LOCALAPPDATA` is unavailable, it uses `~/.config/Axiom/config.json`. Alternatively, set `SHARED_BRAIN_CONFIG` to an absolute private configuration path. Make the override available to login-started processes and agent sessions as well as your interactive shell. Keep the configuration, vault and backups outside the Git checkout.
+Axiom normally reads `%LOCALAPPDATA%/Axiom/config.json`; if `LOCALAPPDATA` is unavailable, it uses `~/.config/Axiom/config.json`. Alternatively, set `AXIOM_CONFIG` to an absolute private configuration path (the older `SHARED_BRAIN_CONFIG` name still works). Make the override available to login-started processes and agent sessions as well as your interactive shell. Keep the configuration, vault and backups outside the Git checkout.
 
 If the chosen configuration does not already exist, create its parent directory and copy `config.example.json` there. Do not overwrite an existing configuration. Edit the copy to use your own absolute paths and an available port. For example:
 
@@ -70,7 +70,7 @@ The official-SDK stdio server exposes policy, search, read, guarded agent writes
 }
 ```
 
-Use your actual checkout, private configuration and project directory. Keep the host session's project and MCP `--cwd` aligned. Without `--cwd`, the server uses its launch working directory; some hosts do not launch it in the project root. `SHARED_BRAIN_CONFIG` is also supported. After linking the package, `axiom-memory-mcp` is the equivalent executable.
+Use your actual checkout, private configuration and project directory. Keep the host session's project and MCP `--cwd` aligned. Without `--cwd`, the server uses its launch working directory; some hosts do not launch it in the project root. `AXIOM_CONFIG` is also supported (as is the older `SHARED_BRAIN_CONFIG`). After linking the package, `axiom-memory-mcp` is the equivalent executable.
 
 Each stdio client starts a process; Axiom does not add a permanently running MCP daemon. Enable only the integrations you use. The native installer does not register MCP servers or edit other clients' settings. MCP makes tools available, not mandatory; retain native policy hooks where configured and validate a fresh session before disabling another memory system.
 
@@ -88,7 +88,7 @@ axiom-memory index-embeddings
 
 Setup accepts `--config "C:/private/axiom/config.json"` and an optional loopback `--endpoint`. It imports the verified artifact as `axiom-qwen3-embedding:latest`, pins the local manifest digest in private configuration, backs up the previous configuration and preserves unrelated settings. It refuses to overwrite an existing alias with different/unverified weights. It does not download a model, start Ollama, alter its global settings, or configure its login startup. Ollama must be available; Axiom's watchdog supervises Axiom, not Ollama.
 
-Ollama selects available GPU acceleration. Axiom requests a 2,048-token context, 256-token batch, 1,024 dimensions and a two-minute inference idle keep-alive. Cold loading can take tens of seconds; the app shows lexical results first. Model allocation is not a total VRAM guarantee. Restart cached harness sessions after upgrading. See [operation and disabling](operations.md#semantic-search-operation) and [measurement boundaries](development.md#retrieval-qualification-and-optional-embeddings).
+Ollama selects available GPU acceleration. Axiom requests a 2,048-token context, 256-token batch, 1,024 dimensions and a two-minute inference idle keep-alive. Cold loading can take tens of seconds; the app shows lexical results first. Model allocation is not a total VRAM guarantee. Restart cached harness sessions after upgrading. See [operation and disabling](operations.md#semantic-search-operation) and [measurement boundaries](retrieval-qualification.md).
 
 ## Start the application
 
@@ -108,8 +108,8 @@ npm run desktop:install
 npm run desktop:release
 ```
 
-After changing the desktop icon artwork, run `npm run desktop:icons` before packaging. The generator verifies that the Windows icon contains every size from 16 to 256 pixels used by the package.
-The app, Windows taskbar, and installer artwork are generated from the same Keystone mark: a light "A" with a clay full stop on a neutral charcoal tile.
-The main window picks a frame from the Windows icon resource at its monitor's DPI.
+Packing needs extra tools (Rust, `vpk`, and the icon generator's Python); see [build from source](development.md#build-from-source).
 
-Opening `Setup.exe` without arguments shows the Axiom-themed Install, Update, Repair, or Downgrade confirmation. The launcher uses Velopack for the installation and opens Axiom after success. Command-line arguments, including `--silent` and `--installto`, go directly to the embedded Velopack installer. In-app updates still use Velopack directly. The Windows build uses the .NET Framework C# compiler already provided by Windows.
+The app, Windows taskbar, and installer artwork are generated from the same Keystone mark: a light "A" with a clay full stop on a neutral charcoal tile. The main window picks a frame from the Windows icon resource at its monitor's DPI.
+
+Opening `Setup.exe` without arguments shows the Axiom-themed Install, Update, Repair, or Downgrade confirmation. The launcher uses Velopack for the installation and opens Axiom after success. Command-line arguments, including `--silent` and `--installto`, go directly to the embedded Velopack installer. In-app updates still use Velopack directly.
