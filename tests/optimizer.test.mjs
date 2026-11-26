@@ -123,6 +123,22 @@ test('detectFormatIssues identifies imported wrappers, nested YAML blocks, extra
     ].join('\n'),
   });
   assert.deepEqual(issues, ['imported-wrapper', 'embedded-yaml-frontmatter', 'unreviewed-extract-wrapper', 'em-dashes']);
+
+  const linkIndexIssues = detectFormatIssues({
+    content: [
+      '---',
+      'title: Overview list',
+      'project: handball-src',
+      '---',
+      '# Overview list',
+      '',
+      '- [One](one.md) - summary one',
+      '- [Two](two.md) - summary two',
+      '- [Three](three.md) - summary three',
+      '- [Four](four.md) - summary four',
+    ].join('\n'),
+  });
+  assert.deepEqual(linkIndexIssues, ['link-index-wrapper']);
 });
 
 test('runMemoryOptimization snapshots first, applies edits/merges/trash recoverably, and enforces guardrails', async t => {

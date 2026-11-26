@@ -495,6 +495,14 @@ export function detectFormatIssues(note) {
   if (/(?:^|\r?\n)---\r?\n(?:name|description|metadata|originSessionId|node_type):/im.test(body)) issues.push('embedded-yaml-frontmatter');
   if (/Unreviewed extract from \[original\]/i.test(body)) issues.push('unreviewed-extract-wrapper');
   if (/[\u2014\u2013]/.test(body)) issues.push('em-dashes');
+  const contentLines = body
+    .split(/\r?\n/)
+    .map(l => l.trim())
+    .filter(l => l && !/^#{1,6}\s/.test(l) && !/^(?:Imported machine-maintained|Original source:|Original snapshot:|Unreviewed extract from )/i.test(l));
+  const linkLines = contentLines.filter(l => /^[-*]\s+\[[^\]]+\]\([^)\s]+\.md(?:#[^)]*)?\)/i.test(l));
+  if (linkLines.length >= 4 && linkLines.length / contentLines.length >= 0.6) {
+    issues.push('link-index-wrapper');
+  }
   return issues;
 }
 
@@ -564,6 +572,7 @@ function buildBatchPrompt({ workspace, availableWorkspaces, batchIndex, totalBat
     'C. Lead for high signal-to-noise: Start the body immediately with `# <Clear Title>`, followed by a crisp 1-2 sentence TL;DR summary of the core rule or fact so Axiom search excerpts (first 240 chars) give agents the actual answer immediately instead of metadata noise.',
     'D. Format cleanly: Use short scannable bullets, bold key phrases, exact file paths/symbols/commands in backticks, short headings (`## Rules`, `## Details`, `## Why`) only when helpful, and zero em dashes or en dashes (use `-`, `,`, or `:`).',
     'E. Mandatory format cleanup: Any note with non-empty `formatIssues` MUST NOT be returned as `keep` -- rewrite it cleanly with `update` (or `move`/`merge`/`trash` as appropriate).',
+    'F. Link-list index notes (`formatIssues` includes `"link-index-wrapper"`, such as imported `MEMORY.md` or `Workspace mapping/index-*.md` overview lists of links): Axiom already organizes notes by workspace, search, and graph. If the linked topics already exist as individual notes in the vault, TRASH the redundant link-list index note rather than keeping a list of links. Only keep/update a concise thematic note if it holds durable facts not present in any standalone note.',
     '',
     'Action & Safety Rules:',
     '1. NEVER invent facts, file paths, or sources. Preserve all accurate `source:`, `project:`, dates, and owner-facing facts.',
