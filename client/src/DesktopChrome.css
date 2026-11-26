@@ -354,7 +354,7 @@
 .split-divider:hover,
 .split-divider-dragging {
   border-left-color: var(--accent);
-  background: rgba(211, 148, 118, 0.14);
+  background: rgba(221, 143, 104, 0.14);
 }
 
 .split-secondary-pane {
@@ -684,7 +684,7 @@ button.statusbar-item:hover {
 }
 
 mark[data-axiom-find] {
-  background: rgba(211, 148, 118, 0.28);
+  background: rgba(221, 143, 104, 0.28);
   color: var(--fg);
   border-radius: 3px;
   padding: 0 1px;

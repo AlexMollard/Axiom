@@ -286,7 +286,7 @@ pub fn apply_win11_window_polish_with_border(window: &WebviewWindow, border_colo
             let hwnd: HWND = raw_hwnd.0 as HWND;
             let dark: i32 = 1;
             let round: i32 = DWMWCP_ROUND;
-            let caption_color: u32 = 0x0011_1213;
+            let caption_color: u32 = 0x0011_1111;
             unsafe {
                 let _ = DwmSetWindowAttribute(
                     hwnd,
@@ -322,7 +322,7 @@ pub fn apply_win11_window_polish_with_border(window: &WebviewWindow, border_colo
 }
 
 pub fn apply_win11_window_polish(window: &WebviewWindow) {
-    apply_win11_window_polish_with_border(window, 0x0024_272b);
+    apply_win11_window_polish_with_border(window, 0x002a_2a2a);
 }
 
 pub fn trigger_snap_layouts() {

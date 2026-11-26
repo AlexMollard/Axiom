@@ -8,7 +8,7 @@ const clamp = value => Math.max(0.12, Math.min(5, value));
 const noteUrl = path => '/?note=' + encodeURIComponent(path);
 
 const workspacePalette = [
-  '#d39476',
+  '#dd8f68',
   '#8aa3ab',
   '#97b18d',
   '#c9a87c',
@@ -19,9 +19,9 @@ const workspacePalette = [
 ];
 
 function workspaceColor(id) {
-  if (!id || id === 'global') return '#d39476';
+  if (!id || id === 'global') return '#dd8f68';
   if (id === 'personal') return '#89a79d';
-  if (id === '__unmapped') return '#9d8f85';
+  if (id === '__unmapped') return '#949492';
   let hash = 0;
   for (let i = 0; i < id.length; i++) hash = (hash * 31 + id.charCodeAt(i)) >>> 0;
   return workspacePalette[hash % workspacePalette.length];
@@ -231,7 +231,7 @@ export default function WorkspaceGraph({ project, label, groups = [], onOpenNote
       if ((sx < -50 && tx < -50) || (sx > width + 50 && tx > width + 50) || (sy < -50 && ty < -50) || (sy > height + 50 && ty > height + 50)) {
         continue;
       }
-      ctx.strokeStyle = touchesActive ? 'rgba(239, 185, 157, 0.72)' : dim ? 'rgba(211, 148, 118, 0.08)' : 'rgba(211, 148, 118, 0.42)';
+      ctx.strokeStyle = touchesActive ? 'rgba(243, 184, 150,0.72)' : dim ? 'rgba(221, 143, 104,0.08)' : 'rgba(221, 143, 104,0.42)';
       ctx.beginPath();
       ctx.moveTo(sx, sy);
       ctx.lineTo(tx, ty);
@@ -243,7 +243,7 @@ export default function WorkspaceGraph({ project, label, groups = [], onOpenNote
         const ax = tx - Math.cos(angle) * targetR;
         const ay = ty - Math.sin(angle) * targetR;
         const head = 6.5;
-        ctx.fillStyle = 'rgba(239, 185, 157, 0.85)';
+        ctx.fillStyle = 'rgba(243, 184, 150,0.85)';
         ctx.beginPath();
         ctx.moveTo(ax, ay);
         ctx.lineTo(ax - Math.cos(angle - 0.42) * head, ay - Math.sin(angle - 0.42) * head);
@@ -263,10 +263,10 @@ export default function WorkspaceGraph({ project, label, groups = [], onOpenNote
       const isSelected = currentSelected === node.path;
       const isActive = currentActive === node.path;
       const color = isUnreviewedAgent(node) && onlyUnreviewed
-        ? '#efb99d'
+        ? '#f3b896'
         : isAllVault
           ? workspaceColor(node.workspaceId || node.project)
-          : '#d39476';
+          : '#dd8f68';
       const r = isSelected ? baseRadius + 2.5 : baseRadius + Math.min(3, Math.sqrt(node.degree || 0) * 0.7);
 
       ctx.save();
@@ -275,7 +275,7 @@ export default function WorkspaceGraph({ project, label, groups = [], onOpenNote
       if (isActive || isSelected) {
         ctx.beginPath();
         ctx.arc(nx, ny, r + 5, 0, Math.PI * 2);
-        ctx.fillStyle = 'rgba(211, 148, 118, 0.20)';
+        ctx.fillStyle = 'rgba(221, 143, 104,0.20)';
         ctx.fill();
       }
 
@@ -283,17 +283,17 @@ export default function WorkspaceGraph({ project, label, groups = [], onOpenNote
       ctx.arc(nx, ny, r, 0, Math.PI * 2);
 
       if (node.external) {
-        ctx.fillStyle = '#191715';
+        ctx.fillStyle = '#171717';
         ctx.fill();
         ctx.lineWidth = 2;
         ctx.setLineDash([3, 2]);
         ctx.strokeStyle = color;
         ctx.stroke();
       } else {
-        ctx.fillStyle = isSelected ? '#efb99d' : color;
+        ctx.fillStyle = isSelected ? '#f3b896' : color;
         ctx.fill();
         ctx.lineWidth = isSelected ? 2.5 : 1.5;
-        ctx.strokeStyle = isSelected ? '#f0ebe6' : '#191715';
+        ctx.strokeStyle = isSelected ? '#f0f0ef' : '#171717';
         ctx.stroke();
       }
       ctx.restore();
@@ -332,9 +332,9 @@ export default function WorkspaceGraph({ project, label, groups = [], onOpenNote
       ctx.globalAlpha = dim ? 0.2 : 1;
       ctx.lineWidth = 4;
       ctx.lineJoin = 'round';
-      ctx.strokeStyle = '#191715';
+      ctx.strokeStyle = '#171717';
       ctx.strokeText(labelText, tx, ty);
-      ctx.fillStyle = node.path === currentActive ? '#efb99d' : '#f0ebe6';
+      ctx.fillStyle = node.path === currentActive ? '#f3b896' : '#f0f0ef';
       ctx.fillText(labelText, tx, ty);
       ctx.restore();
     }

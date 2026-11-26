@@ -2,9 +2,9 @@
   color-scheme: dark;
   scrollbar-gutter: stable;
   scrollbar-color: var(--accent) var(--surface-inset);
-  --bg: #181716; --sidebar: #141312; --surface: #211f1e; --surface-raised: #292624; --surface-inset: #191715;
-  --fg: #f0ebe6; --fg-secondary: #d0c5bb; --muted: #b3a79e; --faint: #9d8f85; --border: #3b3430; --border-soft: #302b27; --border-control: #665b53;
-  --accent: #d39476; --accent-bright: #efb99d; --accent-surface: #382820; --accent-hover: #473025; --accent-border: #795442; --on-accent: #231812; --error: #e2a18f; --error-surface: #34231f;
+  --bg: #161616; --sidebar: #111111; --surface: #1e1e1e; --surface-raised: #272727; --surface-inset: #171717;
+  --fg: #f0f0ef; --fg-secondary: #cfcfcd; --muted: #ababa9; --faint: #949492; --border: #343434; --border-soft: #292929; --border-control: #5f5f5f;
+  --accent: #dd8f68; --accent-bright: #f3b896; --accent-surface: #2d2420; --accent-hover: #3a2b24; --accent-border: #7a4c37; --on-accent: #22140d; --error: #e7a08c; --error-surface: #33211d;
   font-family: 'Manrope Variable', sans-serif; font-size: 14px; line-height: 1.5;
 }
 * { box-sizing: border-box; scrollbar-width: thin; }

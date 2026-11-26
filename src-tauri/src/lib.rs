@@ -121,7 +121,7 @@ fn ensure_quick_capture_window(app: &AppHandle, base_url: &str) {
     .always_on_top(true)
     .skip_taskbar(true)
     .visible(false)
-    .background_color(tauri::window::Color(0x18, 0x17, 0x16, 0xff));
+    .background_color(tauri::window::Color(0x16, 0x16, 0x16, 0xff));
     if let Ok(icon) = tauri::image::Image::from_bytes(include_bytes!("../icons/128x128.png")) {
         if let Ok(with_icon) = quick_builder.icon(icon) {
             quick_builder = with_icon;
@@ -130,7 +130,7 @@ fn ensure_quick_capture_window(app: &AppHandle, base_url: &str) {
         }
     }
     if let Ok(quick_win) = quick_builder.build() {
-        win_native::apply_win11_window_polish_with_border(&quick_win, 0x0042_5479);
+        win_native::apply_win11_window_polish_with_border(&quick_win, 0x0037_4c7a);
         win_native::attach_webview_crash_recovery(&quick_win, format!("{base_url}/?desktopMode=quick"));
         let quick_handle = quick_win.clone();
         quick_win.on_window_event(move |event| match event {
@@ -268,7 +268,7 @@ pub fn run() {
                 .min_inner_size(860.0, 560.0)
                 .decorations(false)
                 .visible(false)
-                .background_color(tauri::window::Color(0x18, 0x17, 0x16, 0xff))
+                .background_color(tauri::window::Color(0x16, 0x16, 0x16, 0xff))
                 .build()?;
             win_native::apply_win11_window_polish(&main_win);
             win_native::attach_webview_crash_recovery(&main_win, format!("{base_url}/"));
