@@ -16,7 +16,9 @@ export const OPTIMIZER_PROVIDERS = ['auto', 'agy', 'omp', 'claude', 'codex', 'an
 const CLI_ORDER = ['agy', 'omp', 'claude', 'codex'];
 const API_ORDER = ['anthropic', 'openai', 'gemini'];
 const MAX_RUN_HISTORY = 25;
-const MAX_BATCH_BYTES = 75 * 1024;
+const MAX_BATCH_BYTES = 11 * 1024;
+const BATCH_CONCURRENCY = 3;
+const AGY_MAX_INLINE_CHARS = 28000;
 const MAX_DEEP_FILES_PER_BATCH = 6;
 const MAX_DEEP_EXCERPT_CHARS = 1400;
 const MAX_STDOUT_BYTES = 8 * 1024 * 1024;
@@ -237,25 +239,14 @@ function runSubprocess(executable, args, stdinText, { timeoutMs, signal } = {}) 
 
 async function invokeCliProvider(providerId, executable, prompt, { model, timeoutMs, signal }) {
   if (providerId === 'agy') {
-    if (Buffer.byteLength(prompt, 'utf8') <= 16384) {
-      const args = ['--disable-slash-commands', '--output-format', 'text'];
-      if (model) args.push('--model', model);
-      args.push(`--print=${prompt}`);
-      const res = await runSubprocess(executable, args, null, { timeoutMs, signal });
-      return { text: res.text, modelUsed: model || 'agy-default' };
+    if (prompt.length > AGY_MAX_INLINE_CHARS) {
+      throw new Error(`Prompt exceeds Windows agy inline CLI limit (${prompt.length} > ${AGY_MAX_INLINE_CHARS} chars).`);
     }
-    const tempFile = path.join(os.tmpdir(), `axiom-opt-${randomUUID()}.txt`);
-    await fs.writeFile(tempFile, prompt, 'utf8');
-    try {
-      const instruction = `Read the full instructions and vault batch from "${tempFile}" and output ONLY the requested valid JSON object. Do not edit or write any files.`;
-      const args = ['--disable-slash-commands', '--mode', 'plan', '--output-format', 'text'];
-      if (model) args.push('--model', model);
-      args.push(`--print=${instruction}`);
-      const res = await runSubprocess(executable, args, null, { timeoutMs, signal });
-      return { text: res.text, modelUsed: model || 'agy-default' };
-    } finally {
-      await fs.rm(tempFile, { force: true }).catch(() => {});
-    }
+    const args = ['--disable-slash-commands', '--output-format', 'text'];
+    if (model) args.push('--model', model);
+    args.push(`--print=${prompt}`);
+    const res = await runSubprocess(executable, args, null, { timeoutMs, signal });
+    return { text: res.text, modelUsed: model || 'agy-default' };
   }
   if (providerId === 'omp') {
     const args = ['-p', '--no-session', '--no-tools', '--no-lsp', '--mode', 'text', '--thinking=high'];
@@ -497,6 +488,16 @@ function isTrashBlocked(note, pins) {
 
 const bodyOf = content => String(content || '').replace(/^---\r?\n[\s\S]*?\r?\n---(?:\r?\n|$)/, '').trim();
 
+export function detectFormatIssues(note) {
+  const body = bodyOf(note?.content);
+  const issues = [];
+  if (/Imported machine-maintained/i.test(body)) issues.push('imported-wrapper');
+  if (/(?:^|\r?\n)---\r?\n(?:name|description|metadata|originSessionId|node_type):/im.test(body)) issues.push('embedded-yaml-frontmatter');
+  if (/Unreviewed extract from \[original\]/i.test(body)) issues.push('unreviewed-extract-wrapper');
+  if (/[\u2014\u2013]/.test(body)) issues.push('em-dashes');
+  return issues;
+}
+
 function canonicalTargetPath(targetWorkspace, requestedPath, sourcePath) {
   const prefix = targetWorkspace === 'global' ? 'Agents/Memory/General/' : `Agents/Memory/Projects/${targetWorkspace}/`;
   const clean = typeof requestedPath === 'string' ? requestedPath.replaceAll('\\', '/').replace(/^\.?\/+/, '').trim() : '';
@@ -530,6 +531,7 @@ function buildBatchPrompt({ workspace, availableWorkspaces, batchIndex, totalBat
     source: note.source || null,
     kind: note.kind || null,
     usageStatus: usage?.status || 'unknown',
+    formatIssues: detectFormatIssues(note),
     existingRepoPaths: repoCheck.existingPaths,
     missingRepoPaths: repoCheck.missingPaths,
     ...(deepRepoCheck && repoCheck.excerpts.length ? { repoExcerpts: repoCheck.excerpts } : {}),
@@ -548,37 +550,43 @@ function buildBatchPrompt({ workspace, availableWorkspaces, batchIndex, totalBat
   return [
     'You are Axiom Memory Optimizer, a high-intelligence curator for Alex Mollard\'s Shared Brain vault.',
     `Workspace scope: ${workspace} (batch ${batchIndex + 1} of ${totalBatches}).`,
-    `Available workspaces in this vault (move misplaced notes to the right one):\n${JSON.stringify(availableWorkspaces, null, 2)}`,
+    `Available workspaces (relocate misplaced notes to the right one):\n${JSON.stringify(availableWorkspaces)}`,
     repoSummary.length ? `Mapped repo roots:\n${repoSummary.join('\n')}` : 'Mapped repo roots: none',
     recentCommits.length ? `Recent commits in primary repo:\n${recentCommits.join('\n')}` : '',
-    cleanupHints.length ? `Heuristic cleanup hints involving notes in this workspace:\n${JSON.stringify(cleanupHints, null, 2)}` : '',
-    readOnlyPayload.length ? `Read-only reference context (NEVER modify or trash these):\n${JSON.stringify(readOnlyPayload, null, 2)}` : '',
+    cleanupHints.length ? `Heuristic cleanup hints:\n${JSON.stringify(cleanupHints)}` : '',
+    readOnlyPayload.length ? `Read-only reference context (NEVER modify or trash):\n${JSON.stringify(readOnlyPayload)}` : '',
     '',
-    'Your task: Inspect every mutable note below and decide for each one whether to KEEP, UPDATE (tidy/tighten/fix stale details), MOVE (relocate a valid note that belongs in a different workspace), MERGE (consolidate duplicates/overlaps), or TRASH (bad/empty/obsolete/broken/superseded junk).',
+    'Your task: Inspect every mutable note below and decide whether to KEEP, UPDATE (tidy/normalize formatting), MOVE (relocate to the right workspace), MERGE (consolidate duplicates/overlaps), or TRASH (bad/empty/stale/obsolete junk).',
     '',
-    'Strict curation rules:',
-    '1. NEVER invent facts, file paths, or sources. Preserve all accurate `source:` frontmatter, `project:`, dates, and owner-facing facts.',
-    '2. Write crisp, direct Markdown without em dashes or en dashes (use `-`, `,`, or `:` instead). Keep YAML frontmatter valid.',
-    '3. Keep `reviewStatus: "reviewed"` notes unless clearly redundant/superseded or objectively inaccurate; prefer consolidating into canonical durable notes.',
-    '4. For `update`: rewrite bloated or noisy wording into clear, well-structured, concise knowledge under the same `path`. Every `update` MUST preserve a real body (>= 20 chars) and valid frontmatter (`title:`, `project:`, `source:`).',
-    '5. For `move`: if a useful note belongs to a different workspace (for example personal preferences sitting in `global`, a project workspace, or `__unmapped` -> move to `personal`; project-specific notes sitting in `global` or `__unmapped` -> move to that matching project ID; cross-project harness workflow rules -> `global`), move it using `targetWorkspace` and canonical `targetPath` under `Agents/Memory/Projects/<targetWorkspace>/` (or `Agents/Memory/General/` for `global`), setting `project: <targetWorkspace>` in frontmatter and optionally tidying wording.',
-    '6. For `merge`: combine 2 or more redundant/overlapping notes into one canonical `targetPath` under `Agents/...`, listing all `sourcePaths` consolidated into it (`removeSources: "trash"` for duplicate/imported noise or `"supersede"` if historical provenance matters).',
-    '7. For `trash`: flag genuinely bad, empty, broken, obsolete-import, or provably stale notes (e.g., where `missingRepoPaths` shows the referenced files no longer exist and the note has no enduring value, or duplicate `Imported/` noise already superseded). Include an explicit plain-English `reason`. Do NOT trash a useful note merely because it is in the wrong workspace: use `move` instead.',
-    '8. Every mutable note path MUST appear in exactly one action (`keep`, `update`, `move`, `merge`, or `trash`), with exact matching `expectedRevision`. Never touch `Owner/`, `Home.md`, or `Agents/Workspace icons.md`.',
+    'Canonical Note Quality Standard (for BOTH human readability and fast agent retrieval):',
+    'A. Single flat YAML frontmatter ONLY at the very top (`title:`, `project:`, `status:`, `source:`, optional `kind:`). NEVER leave a nested `---` block or Claude export keys (`name:`, `description:`, `metadata:`, `node_type:`, `originSessionId:`, `modified:`) inside the Markdown body.',
+    'B. Strip all import boilerplate from the body (`Imported machine-maintained Claude memory; not owner-approved policy.`, `Original source: ...`, `Original snapshot: ...`, `Unreviewed extract from [original]...`). Preserve the real source/provenance path in top frontmatter `source:` (and optional compact `## Sources` section at the bottom if multiple).',
+    'C. Lead for high signal-to-noise: Start the body immediately with `# <Clear Title>`, followed by a crisp 1-2 sentence TL;DR summary of the core rule or fact so Axiom search excerpts (first 240 chars) give agents the actual answer immediately instead of metadata noise.',
+    'D. Format cleanly: Use short scannable bullets, bold key phrases, exact file paths/symbols/commands in backticks, short headings (`## Rules`, `## Details`, `## Why`) only when helpful, and zero em dashes or en dashes (use `-`, `,`, or `:`).',
+    'E. Mandatory format cleanup: Any note with non-empty `formatIssues` MUST NOT be returned as `keep` -- rewrite it cleanly with `update` (or `move`/`merge`/`trash` as appropriate).',
     '',
-    'Return ONLY a raw JSON object matching this exact schema (no markdown commentary outside JSON):',
+    'Action & Safety Rules:',
+    '1. NEVER invent facts, file paths, or sources. Preserve all accurate `source:`, `project:`, dates, and owner-facing facts.',
+    '2. Keep `reviewStatus: "reviewed"` notes conservative: still clean up broken `formatIssues` or merge clear duplicates while preserving every verified fact.',
+    '3. For `update`: keep `path`, update content cleanly (body >= 20 chars after frontmatter).',
+    '4. For `move`: relocate misplaced useful notes (personal preferences -> `personal`, project facts -> matching project ID, cross-project tooling/workflow -> `global`), setting `targetWorkspace`, canonical `targetPath` under `Agents/Memory/Projects/<targetWorkspace>/` or `Agents/Memory/General/`, `project: <targetWorkspace>` in frontmatter, and apply Standards A-D.',
+    '5. For `merge`: combine 2+ overlapping notes into one canonical `targetPath` under `Agents/...`, listing `sourcePaths` (`removeSources: "trash"` for duplicate/import noise, `"supersede"` if provenance matters), and apply Standards A-D.',
+    '6. For `trash`: delete genuinely bad, empty, superseded-junk, or provably stale notes (e.g. `missingRepoPaths` confirms files no longer exist and no enduring value remains). Do NOT trash a useful note merely for being in the wrong workspace: use `move`.',
+    '7. Every mutable note path MUST appear in exactly one action with exact `expectedRevision`. NEVER touch `Owner/`, `Home.md`, or `Agents/Workspace icons.md`.',
+    '',
+    'Return ONLY a raw JSON object matching this exact schema:',
     JSON.stringify({
       actions: [
-        { type: 'keep', path: 'Agents/...md', expectedRevision: '<sha256>', reason: 'Why it stays untouched' },
-        { type: 'update', path: 'Agents/...md', expectedRevision: '<sha256>', reason: 'What was tidied/fixed', content: '---\ntitle: ...\nproject: ...\nsource: ...\n---\n# Title\n...' },
-        { type: 'move', path: 'Agents/...md', expectedRevision: '<sha256>', targetWorkspace: 'personal', targetPath: 'Agents/Memory/Projects/personal/example.md', reason: 'Personal preference stored in wrong workspace', content: '---\ntitle: ...\nproject: personal\nsource: ...\n---\n# Title\n...' },
-        { type: 'merge', targetPath: 'Agents/...md', expectedRevision: '<sha256 or new>', sourcePaths: [{ path: 'Agents/...md', expectedRevision: '<sha256>' }], removeSources: 'trash', reason: 'What was merged', content: '---\n...\n---\n# Merged\n...' },
-        { type: 'trash', path: 'Agents/...md', expectedRevision: '<sha256>', reason: 'Why this note is bad or stale' },
+        { type: 'keep', path: 'Agents/...md', expectedRevision: '<sha256>', reason: 'Already clean, concise, and in right workspace' },
+        { type: 'update', path: 'Agents/...md', expectedRevision: '<sha256>', reason: 'Stripped import boilerplate/nested YAML and tightened for agent retrieval', content: '---\ntitle: ...\nproject: ...\nstatus: unreviewed\nsource: ...\n---\n# Title\n\nCrisp 1-2 sentence TL;DR rule.\n\n- Key fact with `path/to/file`.\n' },
+        { type: 'move', path: 'Agents/...md', expectedRevision: '<sha256>', targetWorkspace: 'personal', targetPath: 'Agents/Memory/Projects/personal/example.md', reason: 'Personal preference stored in wrong workspace', content: '---\ntitle: ...\nproject: personal\nstatus: unreviewed\nsource: ...\n---\n# Title\n\nCrisp TL;DR.\n' },
+        { type: 'merge', targetPath: 'Agents/...md', expectedRevision: '<sha256 or new>', sourcePaths: [{ path: 'Agents/...md', expectedRevision: '<sha256>' }], removeSources: 'trash', reason: 'Consolidated overlapping notes', content: '---\ntitle: ...\nproject: ...\n---\n# Merged\n\nCrisp summary.\n' },
+        { type: 'trash', path: 'Agents/...md', expectedRevision: '<sha256>', reason: 'Why note is stale or empty' },
       ],
-    }, null, 2),
+    }),
     '',
     'Mutable notes to optimize:',
-    JSON.stringify(mutablePayload, null, 2),
+    JSON.stringify(mutablePayload),
   ].filter(Boolean).join('\n');
 }
 
@@ -965,55 +973,75 @@ export async function runMemoryOptimization(config, options = {}) {
       .slice(0, 20)
       .map(it => ({ category: it.category, reason: it.reason, paths: it.notes.map(n => n.path) }));
 
-    for (const chunk of chunkNotes(enriched, settings.maxNotesPerBatch)) {
-      batches.push({ ws, chunk, context: bucket.context.slice(0, 12), repoSummary, recentCommits, wsCleanupHints });
+    const effectiveBatchLimit = Math.min(settings.maxNotesPerBatch, provider === 'agy' ? 8 : settings.maxNotesPerBatch);
+    for (const chunk of chunkNotes(enriched, effectiveBatchLimit)) {
+      batches.push({ ws, chunk, context: bucket.context.slice(0, 10), repoSummary, recentCommits, wsCleanupHints });
     }
   }
 
   const totalBatches = batches.length;
   onProgress({ phase: totalBatches ? 'Running AI curation across workspaces...' : 'No mutable agent notes found.', completedBatches: 0, totalBatches });
 
-  const proposedActions = [];
+  const batchResults = new Array(totalBatches);
   const warnings = [];
   let providerUsed = provider;
   let modelUsed = model || '';
+  let completedBatches = 0;
+  let cursor = 0;
 
-  for (let i = 0; i < batches.length; i++) {
-    if (signal?.aborted) throw new Error('Optimization cancelled.');
-    const b = batches[i];
-    const wsTotal = batches.filter(x => x.ws === b.ws).length;
-    const wsIndex = batches.slice(0, i + 1).filter(x => x.ws === b.ws).length - 1;
-    onProgress({
-      phase: `Analyzing ${b.ws} (batch ${i + 1} of ${totalBatches})...`,
-      completedBatches: i,
-      totalBatches,
-      lastMessage: `Evaluating ${b.chunk.length} notes in ${b.ws}`,
-    });
+  const workerCount = Math.min(BATCH_CONCURRENCY, Math.max(1, totalBatches));
+  await Promise.all(Array.from({ length: workerCount }, async () => {
+    while (cursor < totalBatches) {
+      if (signal?.aborted) throw new Error('Optimization cancelled.');
+      const i = cursor++;
+      const b = batches[i];
+      const wsBatches = batches.filter(x => x.ws === b.ws);
+      const wsTotal = wsBatches.length;
+      const wsIndex = wsBatches.indexOf(b);
 
-    const prompt = buildBatchPrompt({
-      workspace: b.ws,
-      availableWorkspaces,
-      batchIndex: wsIndex,
-      totalBatches: wsTotal,
-      mutableNotes: b.chunk,
-      contextNotes: b.context,
-      repoSummary: b.repoSummary,
-      recentCommits: b.recentCommits,
-      cleanupHints: b.wsCleanupHints,
-      deepRepoCheck,
-    });
+      onProgress({
+        phase: `Analyzing ${b.ws} (${completedBatches}/${totalBatches} complete)...`,
+        completedBatches,
+        totalBatches,
+        lastMessage: `Evaluating ${b.chunk.length} notes in ${b.ws}`,
+      });
 
-    try {
-      const response = await modelRunner(prompt, { provider, model, timeoutMs: settings.timeoutMs, signal });
-      providerUsed = response.providerUsed || providerUsed;
-      modelUsed = response.modelUsed || modelUsed;
-      const parsed = parseModelJson(response.text);
-      proposedActions.push(...parsed.actions);
-    } catch (error) {
-      if (signal?.aborted) throw error;
-      warnings.push(`Workspace "${b.ws}" batch ${wsIndex + 1} failed: ${error.message}`);
+      const prompt = buildBatchPrompt({
+        workspace: b.ws,
+        availableWorkspaces,
+        batchIndex: wsIndex,
+        totalBatches: wsTotal,
+        mutableNotes: b.chunk,
+        contextNotes: b.context,
+        repoSummary: b.repoSummary,
+        recentCommits: b.recentCommits,
+        cleanupHints: b.wsCleanupHints,
+        deepRepoCheck,
+      });
+
+      try {
+        const response = await modelRunner(prompt, { provider, model, timeoutMs: settings.timeoutMs, signal });
+        providerUsed = response.providerUsed || providerUsed;
+        modelUsed = response.modelUsed || modelUsed;
+        const parsed = parseModelJson(response.text);
+        batchResults[i] = parsed.actions;
+      } catch (error) {
+        if (signal?.aborted) throw error;
+        batchResults[i] = [];
+        warnings.push(`Workspace "${b.ws}" batch ${wsIndex + 1} failed: ${error.message}`);
+      } finally {
+        completedBatches++;
+        onProgress({
+          phase: `Analyzed ${completedBatches}/${totalBatches} batches (${b.ws})...`,
+          completedBatches,
+          totalBatches,
+          warnings: [...warnings],
+        });
+      }
     }
-  }
+  }));
+
+  const proposedActions = batchResults.flat().filter(Boolean);
 
   onProgress({ phase: dryRun ? 'Preparing preview report...' : 'Snapshotting vault and applying changes...', completedBatches: totalBatches, totalBatches });
   const { snapshotId, counts, applied } = await applyOptimizationActions(config, proposedActions, { dryRun, byPath, pins });

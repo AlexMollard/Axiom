@@ -11,6 +11,7 @@ import {
   sanitizeOptimizerSettings,
   inspectNoteRepoReferences,
   parseModelJson,
+  detectFormatIssues,
   runMemoryOptimization,
 } from '../src/optimizer.mjs';
 import { createServer } from '../src/server.mjs';
@@ -92,6 +93,36 @@ test('parseModelJson extracts JSON from raw or fenced model output', () => {
 
   const fenced = parseModelJson('Here is the optimization plan:\n```json\n{"actions":[{"type":"trash","path":"Agents/b.md","reason":"stale"}]}\n```\nDone.');
   assert.equal(fenced.actions[0].type, 'trash');
+});
+
+test('detectFormatIssues identifies imported wrappers, nested YAML blocks, extract boilerplate, and em dashes', () => {
+  assert.deepEqual(
+    detectFormatIssues({
+      content: '---\ntitle: Test\nproject: personal\n---\n# Clean Note\n\nConcise summary for agents.\n\n- Uses `src/app.mjs` cleanly.\n',
+    }),
+    [],
+  );
+
+  const issues = detectFormatIssues({
+    content: [
+      '---',
+      'title: Legacy import',
+      'project: global',
+      '---',
+      '# Legacy import',
+      '',
+      'Imported machine-maintained Claude memory; not owner-approved policy.',
+      'Unreviewed extract from [original](old.md). Original source and snapshot are recorded in that note. Preserve historical context; this is not owner-approved policy.',
+      '',
+      '---',
+      'name: dev-stack-profile',
+      'description: "User stack \u2014 C++"',
+      '---',
+      '',
+      'Real text with an em dash \u2014 here.',
+    ].join('\n'),
+  });
+  assert.deepEqual(issues, ['imported-wrapper', 'embedded-yaml-frontmatter', 'unreviewed-extract-wrapper', 'em-dashes']);
 });
 
 test('runMemoryOptimization snapshots first, applies edits/merges/trash recoverably, and enforces guardrails', async t => {
