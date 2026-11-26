@@ -3,7 +3,11 @@ name = "axiom-desktop"
 version = "1.3.10"
 description = "Axiom native Windows desktop shell"
 authors = ["Alex Mollard"]
+license = "MIT"
+repository = "https://github.com/AlexMollard/Axiom"
+homepage = "https://github.com/AlexMollard/Axiom"
 edition = "2021"
+publish = false
 
 [lib]
 name = "axiom_desktop_lib"

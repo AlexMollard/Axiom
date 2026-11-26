@@ -17,6 +17,13 @@
   "bundle": {
     "active": true,
     "targets": ["nsis", "msi"],
+    "publisher": "Alex Mollard",
+    "copyright": "Copyright (c) 2026 Alex Mollard. MIT License.",
+    "license": "MIT",
+    "homepage": "https://github.com/AlexMollard/Axiom",
+    "category": "Productivity",
+    "shortDescription": "Local Markdown memory workspace",
+    "longDescription": "Axiom is a local Markdown memory workspace for people and coding agents, with a native Windows desktop app, search, a knowledge graph and an MCP server.",
     "icon": [
       "icons/32x32.png",
       "icons/128x128.png",
