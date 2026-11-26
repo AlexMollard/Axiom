@@ -12,7 +12,7 @@ Follow [getting started](getting-started.md) for prerequisites, dependency insta
 node src/server.mjs "C:/private/axiom/config.json"
 ```
 
-In another terminal, `npm run dev` watches and rebuilds the browser assets. It is not a second development server: keep the backend running and reload the browser after a rebuild. The Markdown editor is lazy-loaded; the build currently reports a large-chunk warning for it.
+In another terminal, `npm run dev` watches and rebuilds the interface assets. It is not a second development server: keep the backend running and press Ctrl+R in the desktop app after a rebuild (a window holding stale chunks also reloads itself). For the native shell, `npm run desktop:dev` runs `tauri dev`; the backend serves the interface only to windows opened with a `desktopMode` parameter or the shell cookie, so a plain browser tab shows a notice instead. The Markdown editor is lazy-loaded; the build currently reports a large-chunk warning for it.
 
 Useful local commands:
 
@@ -33,27 +33,28 @@ The root contains the README, package manifests, Vite configuration and example 
 | Directory | Responsibility | Entry points |
 | --- | --- | --- |
 | [`src/`](../src/) | Backend, retrieval, reviews, usage and recovery | [HTTP server](../src/server.mjs), [CLI and memory APIs](../src/memory.mjs) |
-| [`client/`](../client/) | React browser application and styles | [Application](../client/src/App.jsx), [graph](../client/src/WorkspaceGraph.jsx) |
+| [`client/`](../client/) | React interface rendered by the desktop shell, and styles | [Application](../client/src/App.jsx), [graph](../client/src/WorkspaceGraph.jsx) |
+| [`src-tauri/`](../src-tauri/) | Tauri 2 desktop shell: windows, tray, hotkey, Windows polish and updates | [App setup](../src-tauri/src/lib.rs), [native Windows](../src-tauri/src/win_native.rs) |
 | [`integrations/`](../integrations/) | Native harness adapters and the agent contract | [Claude Code](../integrations/claude-hook.mjs), [omp](../integrations/omp.ts), [contract](../integrations/instructions.md) |
 | [`scripts/`](../scripts/) | Installation, Windows supervision and native qualification | [Installer](../scripts/install.mjs), [launcher](../scripts/start.ps1), [runtime check](../scripts/verify-runtime.ps1) |
 | [`tests/`](../tests/) | Behavioral suites and their isolated fixtures | `npm test` runs `tests/*.test.mjs` only |
 | [`docs/`](./) | User and contributor guides, plus fictional-data screenshots | [Getting started](getting-started.md) |
 
-`dist/` is generated browser output and `node_modules/` is installed tooling; neither is application source to organize or commit. Keep test discovery scoped to `tests/` so generated browser bundles are not mistaken for Node tests. There are no compatibility entry points left at the old root paths.
+`dist/` is generated interface output and `node_modules/` is installed tooling; neither is application source to organize or commit. Keep test discovery scoped to `tests/` so generated browser bundles are not mistaken for Node tests. There are no compatibility entry points left at the old root paths.
 
 ## Performance
 
 Repeated retrievals retain at most one validated JSON derivative when its serialized size is no greater than 32 MiB, plus one incremental in-memory FTS5 index. The FTS retention check uses SQLite pages and a metadata estimate, capped at 32 MiB and 20,000 documents; an oversized index is closed after the request. These are separate cache-eligibility bounds, not total or idle RAM guarantees. Every retrieval checks source files, edits and deletions, and the JSON index identity; there is no freshness TTL or idle scanning. Search evidence and required policies come from canonical files.
 
-Markdown link resolution uses weakly retained path and alias indexes per catalogue snapshot, preserving relative/root precedence and ambiguity. Broad browser search rereads canonical candidates in batches of 12, then applies ranked-order filtering and pagination. Native scoped retrieval reads candidates one at a time and stops once its limit is met. Totals, evidence, policies and freshness are not replaced by TTL-based answers.
+Markdown link resolution uses weakly retained path and alias indexes per catalogue snapshot, preserving relative/root precedence and ambiguity. Broad interface search rereads canonical candidates in batches of 12, then applies ranked-order filtering and pagination. Native scoped retrieval reads candidates one at a time and stops once its limit is met. Totals, evidence, policies and freshness are not replaced by TTL-based answers.
 
 Workspace graphs run their initial 240-tick force layout in a short-lived browser worker, terminated on completion or navigation. Panning and graph-search input reuse unchanged SVG geometry; zoom and fit update directly instead of replaying a full redraw animation. The graph note list mounts only when opened and uses 48-row progressive disclosure, with search across all graph nodes. Large graphs still require layout CPU and render every visible SVG node and edge; there is no unlimited graph-size or frame-rate guarantee.
 
-Content-hashed browser assets are cached immutably. HTML, note/API responses and unversioned assets remain uncached. Closing the browser stops its polling without stopping memory access.
+Content-hashed interface assets are cached immutably. HTML, note/API responses and unversioned assets remain uncached. Closing the app window stops its polling without stopping memory access.
 
 Semantic retrieval lives in [`src/embeddings.mjs`](../src/embeddings.mjs), with verified setup in [`scripts/setup-embeddings.mjs`](../scripts/setup-embeddings.mjs). It uses direct local Ollama requests, not QMD. Model digest, chunk/query formatting, dimensions and context version the vector cache. Heading-aware Unicode/CRLF chunks retain exact canonical UTF-16 offsets; instruction-bearing queries are bounded to 1,800 UTF-8 bytes with explicit shortened status. An individual request examines at most 32 MiB / 16,000 chunks, reports incomplete work, and returns at most 100 semantic candidates. Broad search defaults to a 0.35 cosine floor; related/capture suggestions require at least 0.5. Neither is a probability or relevance guarantee.
 
-The same scoped/status/review/owner predicate selects embedding candidates before vector ranking and validates fresh canonical bytes afterwards. Hybrid search fuses lexical and semantic ranks; stale semantic evidence is dropped rather than reattached to a changed revision. Queued work and HTTP inference support cancellation, finite deadlines and bounded responses. Browser navigation cancels abandoned searches. Automatic policies use cached vectors only and cannot trigger inference. Note/query vectors share a bounded persistent SQLite store; the in-process query LRU retains at most 128 vectors. Maintenance does not create delivery receipts.
+The same scoped/status/review/owner predicate selects embedding candidates before vector ranking and validates fresh canonical bytes afterwards. Hybrid search fuses lexical and semantic ranks; stale semantic evidence is dropped rather than reattached to a changed revision. Queued work and HTTP inference support cancellation, finite deadlines and bounded responses. In-app navigation cancels abandoned searches. Automatic policies use cached vectors only and cannot trigger inference. Note/query vectors share a bounded persistent SQLite store; the in-process query LRU retains at most 128 vectors. Maintenance does not create delivery receipts.
 
 ### Retrieval qualification and optional embeddings
 

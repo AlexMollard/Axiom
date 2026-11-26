@@ -6,7 +6,7 @@ Set up a private vault and launch Axiom on Windows.
 
 ## Prerequisites and build
 
-Install Node.js 22.13 or newer and PowerShell 7. Bun and omp are needed only for the omp integration. In PowerShell 7, from the application checkout, install dependencies, build the browser application and link the CLI:
+Install Node.js 22.13 or newer and PowerShell 7. Bun and omp are needed only for the omp integration. In PowerShell 7, from the application checkout, install dependencies, build the interface and link the CLI:
 
 ```powershell
 npm ci --ignore-scripts
@@ -37,7 +37,7 @@ Create the vault and its `Owner` directory. A human must write both `Owner/Polic
 
 ## Optional agent integrations
 
-For browser-only use, skip the installer. To install the native Claude Code hooks and omp extension wrapper, after creating the two owner files run:
+If you only use the desktop app, skip the installer. To install the native Claude Code hooks and omp extension wrapper, after creating the two owner files run:
 
 ```powershell
 node scripts/install.mjs
@@ -88,15 +88,17 @@ axiom-memory index-embeddings
 
 Setup accepts `--config "C:/private/axiom/config.json"` and an optional loopback `--endpoint`. It imports the verified artifact as `axiom-qwen3-embedding:latest`, pins the local manifest digest in private configuration, backs up the previous configuration and preserves unrelated settings. It refuses to overwrite an existing alias with different/unverified weights. It does not download a model, start Ollama, alter its global settings, or configure its login startup. Ollama must be available; Axiom's watchdog supervises Axiom, not Ollama.
 
-Ollama selects available GPU acceleration. Axiom requests a 2,048-token context, 256-token batch, 1,024 dimensions and a two-minute inference idle keep-alive. Cold loading can take tens of seconds; the browser shows lexical results first. Model allocation is not a total VRAM guarantee. Restart cached harness sessions after upgrading. See [operation and disabling](operations.md#semantic-search-operation) and [measurement boundaries](development.md#retrieval-qualification-and-optional-embeddings).
+Ollama selects available GPU acceleration. Axiom requests a 2,048-token context, 256-token batch, 1,024 dimensions and a two-minute inference idle keep-alive. Cold loading can take tens of seconds; the app shows lexical results first. Model allocation is not a total VRAM guarantee. Restart cached harness sessions after upgrading. See [operation and disabling](operations.md#semantic-search-operation) and [measurement boundaries](development.md#retrieval-qualification-and-optional-embeddings).
 
 ## Start the application
 
 ```powershell
-./scripts/start.ps1 -Register -Open
+./scripts/start.ps1 -Register
 ```
 
-This installs the native Claude Code hooks, omp extension wrapper, and (on Windows, when a Velopack installer is available locally in `Releases/` or via GitHub Releases) the Axiom desktop application into `%LOCALAPPDATA%/AxiomDesktop`. Pass `--skip-desktop` to install only agent integrations.
+This starts the local backend and registers it to start hidden at sign-in. Then open the **Axiom** desktop app from the Start menu. The backend serves the interface only to the desktop app; opening its address in a browser shows a short notice instead. This is a product boundary, not access control: the loopback API, CLI and MCP server work exactly as before.
+
+The integration installer also installs the desktop app into `%LOCALAPPDATA%/AxiomDesktop` when a Velopack installer is available locally in `Releases/` or from GitHub Releases. Pass `--skip-desktop` to install only agent integrations. You can also run `AxiomDesktop-win-Setup.exe` from the latest GitHub release directly.
 
 To pack or publish the self-contained Velopack desktop installer locally:
 

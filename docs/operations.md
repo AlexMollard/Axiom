@@ -6,7 +6,7 @@ Run, protect and recover an Axiom installation on Windows.
 
 ## Windows startup and supervision
 
-`./scripts/start.ps1 -Register -Open` registers two least-privilege scheduled tasks for the signed-in interactive user: a sign-in task and a short-lived health task every three minutes. They require neither administrator rights nor a stored password and do not wake the PC. Both tasks use `conhost.exe --headless` to prevent console flashes and focus theft; PowerShell's `-WindowStyle Hidden` alone hides the console only after it appears. The sign-in task runs a hidden one-shot launcher that starts hidden Node and exits. Node is the only persistent application process; there is no persistent PowerShell supervisor. Registering again migrates verified tasks from the previous direct PowerShell launcher.
+`./scripts/start.ps1 -Register` registers two least-privilege scheduled tasks for the signed-in interactive user: a sign-in task and a short-lived health task every three minutes. They require neither administrator rights nor a stored password and do not wake the PC. Both tasks use `conhost.exe --headless` to prevent console flashes and focus theft; PowerShell's `-WindowStyle Hidden` alone hides the console only after it appears. The sign-in task runs a hidden one-shot launcher that starts hidden Node and exits. Node is the only persistent application process; there is no persistent PowerShell supervisor. Registering again migrates verified tasks from the previous direct PowerShell launcher.
 
 The launch task has no execution-time limit, ignores overlapping starts and requests three one-minute retries for task or action launch failures. Do not rely on those native retries to restart an exited process: native qualification did not restart either a killed process or an ordinary nonzero exit. The health task performs process recovery explicitly.
 
@@ -28,7 +28,7 @@ The integration installer saves an installation report and rollback copies under
 
 ### Upgrading from the earlier flat layout
 
-Before replacing an old checkout, use its `./start.ps1 -Unregister` to retire the verified old task actions, then stop only its verified backend: match the `/health` PID to the Node executable, old server path and selected configuration. Unregistering alone does not stop Node. After updating, relink the CLI with `npm link --ignore-scripts` and register `./scripts/start.ps1 -Register -Open`. The command name stays `axiom-memory`, but its target is now `src/memory.mjs`.
+Before replacing an old checkout, use its `./start.ps1 -Unregister` to retire the verified old task actions, then stop only its verified backend: match the `/health` PID to the Node executable, old server path and selected configuration. Unregistering alone does not stop Node. After updating, relink the CLI with `npm link --ignore-scripts` and register `./scripts/start.ps1 -Register`. The command name stays `axiom-memory`, but its target is now `src/memory.mjs`.
 
 If npm reports `EEXIST` for an old CLI shim, inspect and back up that shim and verify that the linked package targets this checkout before removing the obsolete owned shim and relinking. Do not force-overwrite an unrelated command. Restart existing harness sessions to replace cached modules. Native hook and extension paths remain under `integrations/`; private configuration, vault and state do not move.
 
@@ -40,7 +40,7 @@ The index, usage database and harness observations live in `.state` beside the s
 
 Optional embeddings use the existing local Ollama service; Axiom creates no additional always-running model daemon. `axiom-memory embeddings` and Memory health report model identity, sleeping/loaded/unavailable state and cached document chunks without loading the model. Reported model GPU allocation is not whole-device consumption.
 
-`axiom-memory index-embeddings` or the human **Reindex active notes** action builds missing vectors without changing canonical notes or review state. Edits and external Obsidian changes are checked at the next search/reindex; only changed chunks require inference. Deleted or excluded notes cannot be recovered as results from old cached vectors. Browser **All notes** deliberately includes retired material; **Active knowledge** and normal native search exclude it.
+`axiom-memory index-embeddings` or the human **Reindex active notes** action builds missing vectors without changing canonical notes or review state. Edits and external Obsidian changes are checked at the next search/reindex; only changed chunks require inference. Deleted or excluded notes cannot be recovered as results from old cached vectors. The app's **All notes** deliberately includes retired material; **Active knowledge** and normal native search exclude it.
 
 The private `.state/embeddings.sqlite` cache stores hashes, model/format fingerprints and float vectors, not raw note/query text or note paths. Treat embeddings as sensitive derived data, not encryption or a backup. It bounds stored vector payload to 64 MiB and 16,384 rows; SQLite metadata/free pages/WAL and live processing use additional space/RAM. Derived old vectors may remain until bounded eviction; deleting a canonical note is not immediate erasure of its historical derivatives. Clear the cache deliberately with Axiom and harness processes stopped if erasure is required.
 
@@ -59,17 +59,17 @@ Restart cached harness sessions too. Existing inference expires through idle kee
 
 ## Security and privacy
 
-The server listens on loopback and uses a restrictive Content Security Policy, host and origin checks, and protections for mutation requests including cross-site requests. These reduce exposure, but do not authenticate other local users or processes. Protect access to the machine and private files accordingly.
+The server listens on loopback and uses a restrictive Content Security Policy, host and origin checks, and protections for mutation requests including cross-site requests. These reduce exposure, but do not authenticate other local users or processes. Protect access to the machine and private files accordingly. The interface is served only to desktop app windows (marked by a `desktopMode` parameter and a cookie); that hides it from ordinary browsers but is not access control, and the API stays reachable on loopback.
 
 Native hooks and policy instructions are rule-level safeguards, not operating-system isolation. Direct shell commands, unsupported tools or other processes can bypass them. Content delivered to an agent may enter its model provider's context; local storage does not guarantee that agent context remains local. See [agent memory](agent-memory.md) for ownership boundaries and supported workflows.
 
 Keep the configuration, vault, backups and operational state outside the application Git checkout. `.gitignore` is a precaution, not a substitute for private locations and reviewing staged files before sharing. The application repository should not contain vault contents, usage data, private captures or machine configuration.
 
-Local draft copies contain note text in this browser profile, isolated by vault ID and path. Treat the browser profile as private too. Draft recovery is not a backup, is not synchronized to Obsidian or another browser, and may fail when storage is disabled, full or cleared. Recent-note navigation stores paths, not usage evidence.
+Local draft copies contain note text in the desktop app's private state and WebView2 profile, isolated by vault ID and path. Treat both as private too. Draft recovery is not a backup, is not synchronized to Obsidian or another machine, and may fail when storage is full or cleared. Recent-note navigation stores paths, not usage evidence.
 
 ## Backups and restore
 
-Axiom creates a local vault snapshot at server startup and every 24 hours while running. You can also create one with `axiom-memory backup` or in the browser recovery interface. Snapshots contain vault files and workspace settings; the usage database and other operational state are not part of the vault snapshot. Plan separately for state you need to preserve.
+Axiom creates a local vault snapshot at server startup and every 24 hours while running. You can also create one with `axiom-memory backup` or from the app's **Backups** page. Snapshots contain vault files and workspace settings; the usage database and other operational state are not part of the vault snapshot. Plan separately for state you need to preserve.
 
 In the recovery interface, select a snapshot and check it. To restore, use the full snapshot directory under `backupDir` and a separate, not-yet-existing target outside both the vault and backup directory:
 
