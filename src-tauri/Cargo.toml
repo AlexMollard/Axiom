@@ -1,6 +1,6 @@
 [package]
 name = "axiom-desktop"
-version = "1.3.9"
+version = "1.3.10"
 description = "Axiom native Windows desktop shell"
 authors = ["Alex Mollard"]
 edition = "2021"
