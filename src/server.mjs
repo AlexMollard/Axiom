@@ -318,11 +318,11 @@ export function createServer(config, configId = null) {
         const [{ settings, configRevision }, providers, state] = await Promise.all([
           optimizerConfigState(config),
           detectOptimizerProviders(config),
-          Promise.resolve(optimizer.getState()),
+          optimizer.getState(),
         ]);
         return json(200, { settings, configRevision, providers, ...state });
       }
-      if (url.pathname === '/api/optimizer/status') { return json(200, optimizer.getState()); }
+      if (url.pathname === '/api/optimizer/status') { return json(200, await optimizer.getState()); }
       if (url.pathname === '/api/embeddings') { await maybeReloadConfig(config); return json(200, await embeddingStatus(config)); }
       if (url.pathname === '/api/harnesses') return json(200, await getHarnessStatus(config));
       if (url.pathname === '/api/recovery') return json(200, await getRecoveryStatus(config));

@@ -1084,19 +1084,12 @@ export async function runMemoryOptimization(config, options = {}) {
 export function createOptimizerManager(config, renderMarkdown) {
   let activeJob = null;
   let activeController = null;
-  let cachedRuns = null;
-
-  const loadRunsSyncSafe = async () => {
-    cachedRuns = await readOptimizerRuns(config);
-    return cachedRuns;
-  };
-  void loadRunsSyncSafe();
 
   return {
-    getState() {
+    async getState() {
       return {
         activeJob: activeJob ? { ...activeJob } : null,
-        runs: cachedRuns || [],
+        runs: await readOptimizerRuns(config),
       };
     },
     startRun(params = {}) {
@@ -1139,7 +1132,6 @@ export function createOptimizerManager(config, renderMarkdown) {
               }
             },
           });
-          cachedRuns = await readOptimizerRuns(config);
           if (activeJob?.id === jobId) {
             activeJob.status = 'completed';
             activeJob.finishedAt = report.finishedAt;
@@ -1165,7 +1157,7 @@ export function createOptimizerManager(config, renderMarkdown) {
             applied: [],
             error: error.message || 'Optimization failed.',
           };
-          cachedRuns = await persistOptimizerRun(config, failedRun).catch(() => cachedRuns || []);
+          await persistOptimizerRun(config, failedRun).catch(() => {});
           if (activeJob?.id === jobId) {
             activeJob.status = controller.signal.aborted ? 'cancelled' : 'failed';
             activeJob.finishedAt = failedRun.finishedAt;

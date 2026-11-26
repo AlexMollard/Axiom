@@ -347,8 +347,11 @@ test('optimizer HTTP endpoints enforce CSRF, expose sanitized settings, and trac
   assert.equal(updated.settings.hasApiKey, true);
   assert.equal(Object.hasOwn(updated.settings, 'apiKey'), false);
 
-  const statusRes = await fetch(`${origin}/api/optimizer/status`);
-  assert.equal(statusRes.status, 200);
-  const statusData = await statusRes.json();
-  assert.ok(Array.isArray(statusData.runs));
+  // The CLI writes its report independently of the running HTTP server.
+  const preview = await runMemoryOptimization(config, { dryRun: true });
+  for (const endpoint of ['settings', 'status']) {
+    const res = await fetch(`${origin}/api/optimizer/${endpoint}`);
+    assert.equal(res.status, 200);
+    assert.equal((await res.json()).runs[0]?.id, preview.id);
+  }
 });

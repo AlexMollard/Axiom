@@ -105,3 +105,7 @@ Lexical comparison shares its 5,000-pair budget round-robin across workspaces ra
 Nothing is preselected. **Move to Trash** confirms one eligible note at a time and uses the existing reversible Trash workflow. Cleanup removal is blocked for owner/control notes, pins, resolved incoming links, human review history and decision/proposal/handover/replacement/conflict provenance. Historical material is retained for inspection rather than silently purged. At confirmation, Axiom reloads the configuration, rescans eligibility and checks the canonical revision; a changed, newly protected or no-longer-eligible note produces a conflict instead of deletion. Inspect, cancel and rescan when this happens. Arbitrary external file writers are not covered by an OS-level multi-file transaction.
 
 Restore a removed note from **Trash**. Cleanup does not automatically merge text, rewrite links, transfer metadata, permanently purge notes or edit the human review ledger. These are human workflows, never an agent workaround for owner-note restrictions.
+
+### Memory Optimizer reports
+
+Under **Clean up → Memory Optimizer**, use **Run history** to inspect reports from the app or CLI, including proposed changes from a preview. Reopen **Clean up** to load reports saved by the CLI. Preview reports show action summaries and reasons, not full edits, and cannot be applied from history. Starting a live run asks the model to generate a new plan.
