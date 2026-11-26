@@ -41,7 +41,7 @@ function launch(t, configPath, argument = configPath) {
   const child = spawn(process.execPath, [serverPath, argument], {cwd: os.tmpdir(), stdio: ['ignore', 'pipe', 'pipe']});
   const ready = Promise.withResolvers(), exited = Promise.withResolvers();
   let stdout = '', stderr = '';
-  child.stdout.on('data', data => { stdout += data; if (stdout.includes('Shared Brain: http://')) ready.resolve(); });
+  child.stdout.on('data', data => { stdout += data; if (stdout.includes('Axiom: http://')) ready.resolve(); });
   child.stderr.on('data', data => { stderr += data; });
   child.once('error', error => { ready.reject(error); exited.reject(error); });
   child.once('exit', (code, signal) => { ready.resolve(); exited.resolve({code, signal, stdout, stderr}); });

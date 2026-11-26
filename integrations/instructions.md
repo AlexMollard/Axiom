@@ -1,4 +1,4 @@
-# Shared Brain contract
+# Axiom contract
 
 Human-authored notes outside `Agents/` are authoritative and read-only to agents, not to the human owner. Follow owner policies over agent-authored memory. Never edit owner notes, Home, or attachments; propose corrections with the source path instead. Browser editing is a human-authoring workflow: agents must not use editor endpoints, browser automation, or the editor-only helper to bypass owner-note restrictions. These are rule-level safeguards, not OS isolation: arbitrary shell or eval can bypass them.
 

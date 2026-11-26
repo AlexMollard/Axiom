@@ -35,7 +35,7 @@ const input = await new Promise((resolve, reject) => {
   process.stdin.on('data', chunk => { data += chunk; });
   process.stdin.on('end', () => { try { resolve(JSON.parse(data)); } catch (error) { reject(error); } });
   process.stdin.on('error', reject);
-}).catch(error => { console.error(`Shared Brain hook input: ${error.message}`); process.exit(2); });
+}).catch(error => { console.error(`Axiom hook input: ${error.message}`); process.exit(2); });
 
 const event = input.hook_event_name;
 const cwd = input.cwd || process.cwd();
@@ -71,10 +71,10 @@ try {
         }
       }
     }
-    if (blocked) process.stdout.write(JSON.stringify({ hookSpecificOutput: { hookEventName: 'PreToolUse', permissionDecision: 'deny', permissionDecisionReason: 'Shared Brain owner notes and attachments are read-only. Propose corrections instead.' } }));
+    if (blocked) process.stdout.write(JSON.stringify({ hookSpecificOutput: { hookEventName: 'PreToolUse', permissionDecision: 'deny', permissionDecisionReason: 'Axiom owner notes and attachments are read-only. Propose corrections instead.' } }));
   }
 } catch (error) {
-  console.error(`Shared Brain ${event}: ${error.message}`);
+  console.error(`Axiom ${event}: ${error.message}`);
   if (event === 'UserPromptSubmit' || event === 'PreToolUse') process.exitCode = 2;
   else process.exitCode = 1;
 }

@@ -319,7 +319,7 @@ export async function syncVaultIndex(config, indexPath, { readRawNote, hash }) {
       }
       warmSqlite = null;
       if (isUnwritableError(error) || CORRUPT_RE.test(error.message || '')) {
-        console.warn(`Shared Brain: derivative SQLite index unavailable (${error.message}); using memory.`);
+        console.warn(`Axiom: derivative SQLite index unavailable (${error.message}); using memory.`);
         const entries = await readAllRaw(config, fileInfos, readRawNote);
         return { entries, persisted: false };
       }
@@ -348,7 +348,7 @@ export async function queryVaultFts(config, indexPath, words, { all = false, pro
       : db.prepare("SELECT n.path, bm25(notes_fts, 8.0, 4.0, 1.0) AS rank FROM notes_fts JOIN notes n ON n.id = notes_fts.rowid WHERE notes_fts MATCH ? AND n.project IN ('global', 'personal', ?) ORDER BY rank, n.id").all(match, project);
     return rows.map(row => ({ path: row.path, score: -Number(row.rank) }));
   } catch (error) {
-    console.warn(`Shared Brain: FTS query fallback (${error.message})`);
+    console.warn(`Axiom: FTS query fallback (${error.message})`);
     return null;
   } finally {
     if (db) {

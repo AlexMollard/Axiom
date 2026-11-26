@@ -105,9 +105,11 @@ pub fn resolve_config_path(cli_override: Option<PathBuf>) -> Result<PathBuf, Str
             return canonicalize_config_path(Path::new(val));
         }
     }
-    if let Ok(env_path) = std::env::var("SHARED_BRAIN_CONFIG") {
-        if !env_path.trim().is_empty() {
-            return canonicalize_config_path(Path::new(env_path.trim()));
+    for name in ["AXIOM_CONFIG", "SHARED_BRAIN_CONFIG"] {
+        if let Ok(env_path) = std::env::var(name) {
+            if !env_path.trim().is_empty() {
+                return canonicalize_config_path(Path::new(env_path.trim()));
+            }
         }
     }
     if let Ok(local_app_data) = std::env::var("LOCALAPPDATA") {
@@ -244,7 +246,7 @@ impl BackendManager {
         let vault_name = vault_path
             .file_name()
             .and_then(|n| n.to_str())
-            .unwrap_or("Shared Brain")
+            .unwrap_or("Axiom")
             .to_string();
         let backup_dir = PathBuf::from(&parsed.backup_dir);
         let health_client = reqwest::blocking::Client::builder()

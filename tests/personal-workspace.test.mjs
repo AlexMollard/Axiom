@@ -42,7 +42,7 @@ test('personal workspace appears in /api/catalog top-level and stays outside wor
   const { config } = await fixture(t);
   await saveFromEditor(config, 'Agents/Workspace icons.md', serializeWorkspaceIcons({ global: 'library' }), 'new');
   await writeNote(config, 'Agents/Memory/Projects/personal/prefs.md', '# Prefs\r\nUse dark theme.\r\n', 'new', 'user');
-  await saveFromEditor(config, 'Owner/Notes/about.md', '---\r\nproject: personal\r\n---\r\n# About Alex\r\nPrefers concise diffs.\r\n', 'new');
+  await saveFromEditor(config, 'Owner/Notes/about.md', '---\r\nproject: personal\r\n---\r\n# About Sam\r\nPrefers concise diffs.\r\n', 'new');
 
   const server = createServer(config);
   await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
@@ -90,17 +90,17 @@ test('personal workspace is protected from deletion and updates keep it top-leve
 
   const updated = await updateWorkspace(config, {
     id: 'personal',
-    name: 'Alex Personal',
+    name: 'Sam Personal',
     icon: 'user-round',
     group: 'home',
     expectedRevision: initial.revision,
   });
-  assert.equal(updated.name, 'Alex Personal');
+  assert.equal(updated.name, 'Sam Personal');
   assert.equal(updated.icon, 'user-round');
   assert.equal(updated.group, 'personal');
 
   const persisted = await loadConfig(config.configPath);
-  assert.equal(persisted.workspaceNames?.personal, 'Alex Personal');
+  assert.equal(persisted.workspaceNames?.personal, 'Sam Personal');
   assert.equal(persisted.workspaceGroups?.personal, undefined);
 });
 

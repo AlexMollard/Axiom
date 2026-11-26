@@ -590,7 +590,7 @@ function MainApp({ detached = false }) {
 
   const notes = useMemo(() => catalog?.notes || [], [catalog?.notes]);
   const projects = useMemo(() => catalog?.projects || [], [catalog?.projects]);
-  const vault = catalog?.vaultName || 'Shared Brain';
+  const vault = catalog?.vaultName || 'Axiom';
   const workspaceIcons = useMemo(() => catalog?.workspaceIcons || {}, [catalog?.workspaceIcons]);
   const unmapped = useCallback(n => n.project !== 'global' && n.project !== 'personal' && !projects.some(p => p.id === n.project), [projects]);
 

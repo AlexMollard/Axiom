@@ -43,6 +43,8 @@ test('configuration defaults to private Axiom directory and respects overrides',
   assert.equal((await loadConfig()).configPath, file);
   process.env.SHARED_BRAIN_CONFIG = override;
   assert.equal((await loadConfig()).configPath, override);
+  process.env.AXIOM_CONFIG = file;
+  try { assert.equal((await loadConfig()).configPath, file); } finally { delete process.env.AXIOM_CONFIG; }
   assert.equal((await loadConfig(file)).configPath, file);
   await fs.rm(file);
   delete process.env.SHARED_BRAIN_CONFIG;

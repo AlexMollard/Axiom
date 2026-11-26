@@ -10,7 +10,7 @@ export default function (pi: ExtensionAPI) {
   let needsPolicyContext = true;
   const seen = new Set<string>();
   const text = (value: unknown) => ({ content: [{ type: 'text' as const, text: JSON.stringify(value) }], details: {} });
-  const failure = (error: unknown) => { throw new Error(`Shared Brain: ${error instanceof Error ? error.message : String(error)}`); };
+  const failure = (error: unknown) => { throw new Error(`Axiom: ${error instanceof Error ? error.message : String(error)}`); };
 
   pi.registerTool({
     name: 'shared_memory_search', label: 'Search shared memory', approval: 'read',
@@ -64,7 +64,7 @@ export default function (pi: ExtensionAPI) {
   pi.on('input', async (_event, ctx) => {
     try { const config = await loadConfig(); await policies(config, ctx.cwd, ''); await observeHarness(config, 'omp', 'input'); }
     catch (error) {
-      ctx.ui.notify(`Shared Brain policy unavailable; prompt blocked: ${error instanceof Error ? error.message : String(error)}`, 'error');
+      ctx.ui.notify(`Axiom policy unavailable; prompt blocked: ${error instanceof Error ? error.message : String(error)}`, 'error');
       return { handled: true };
     }
   });
@@ -80,7 +80,7 @@ export default function (pi: ExtensionAPI) {
       if (!needsPolicyContext) return { systemPrompt: [...event.systemPrompt, policy] };
     } catch (error) {
       ctx.abort();
-      throw new Error(`Shared Brain policy unavailable: ${error instanceof Error ? error.message : String(error)}`);
+      throw new Error(`Axiom policy unavailable: ${error instanceof Error ? error.message : String(error)}`);
     }
   });
   // Revival discards hook returns; agent-initiated wakes need per-call context instead.
@@ -91,12 +91,12 @@ export default function (pi: ExtensionAPI) {
       return { messages: [...event.messages, { role: 'custom' as const, customType: 'shared-brain-policy', content: policy, display: false, timestamp: Date.now() }] };
     } catch (error) {
       ctx.abort();
-      throw new Error(`Shared Brain policy unavailable: ${error instanceof Error ? error.message : String(error)}`);
+      throw new Error(`Axiom policy unavailable: ${error instanceof Error ? error.message : String(error)}`);
     }
   });
   pi.on('before_subagent_spawn', async (_event, ctx) => {
     try { const config = await loadConfig(); await policies(config, ctx.cwd, ''); await observeHarness(config, 'omp', 'before_subagent_spawn'); }
-    catch (error) { return { block: true, reason: `Shared Brain policy unavailable: ${error instanceof Error ? error.message : String(error)}` }; }
+    catch (error) { return { block: true, reason: `Axiom policy unavailable: ${error instanceof Error ? error.message : String(error)}` }; }
   });
   pi.on('tool_call', async (event, ctx) => {
     if (event.toolName !== 'write' && event.toolName !== 'edit') return;
@@ -116,8 +116,8 @@ export default function (pi: ExtensionAPI) {
         for (const match of input.input.matchAll(/^\[([^\]#\r\n]+)#[0-9A-Fa-f]{4}\]\s*$|^MV\s+(.+)$|^\*\*\* (?:Add File|Update File|Delete File|Move to):\s*(.+)$/gm)) candidates.push((match[1] || match[2] || match[3]).replace(/^"|"$/g, ''));
       }
       for (const candidate of candidates) {
-        if (await isProtectedPath(config, candidate, ctx.cwd)) return { block: true, reason: 'Shared Brain owner notes and attachments are read-only; propose corrections instead.' };
+        if (await isProtectedPath(config, candidate, ctx.cwd)) return { block: true, reason: 'Axiom owner notes and attachments are read-only; propose corrections instead.' };
       }
-    } catch (error) { return { block: true, reason: `Shared Brain guard unavailable: ${error instanceof Error ? error.message : String(error)}` }; }
+    } catch (error) { return { block: true, reason: `Axiom guard unavailable: ${error instanceof Error ? error.message : String(error)}` }; }
   });
 }

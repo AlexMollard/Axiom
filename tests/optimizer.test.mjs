@@ -35,7 +35,7 @@ async function fixture(t) {
   }, null, 2));
 
   const config = await loadConfig(configPath);
-  await saveFromEditor(config, 'Home.md', '# Shared Brain\r\n', 'new');
+  await saveFromEditor(config, 'Home.md', '# Axiom\r\n', 'new');
   await saveFromEditor(config, 'Owner/Policies.md', '# Policies\r\n\r\nKeep clean.\r\n', 'new');
   await saveFromEditor(config, 'Agents/Workspace icons.md', serializeWorkspaceIcons({ alpha: 'code', global: 'globe', personal: 'user' }), 'new');
   return { root, vault, backupDir, repoRoot, config };
@@ -128,7 +128,7 @@ test('detectFormatIssues identifies imported wrappers, nested YAML blocks, extra
     content: [
       '---',
       'title: Overview list',
-      'project: handball-src',
+      'project: gamma-src',
       '---',
       '# Overview list',
       '',
@@ -229,7 +229,7 @@ test('runMemoryOptimization snapshots first, applies edits/merges/trash recovera
 
 test('runMemoryOptimization relocates misplaced notes cleanly and enforces move guardrails', async t => {
   const { config } = await fixture(t);
-  const wrongWorkspaceBody = '---\r\ntitle: Dark mode taste\r\nproject: alpha\r\nsource: manual note\r\n---\r\n# Dark mode taste\r\n\r\nAlex prefers charcoal backgrounds with terracotta accents.\r\n';
+  const wrongWorkspaceBody = '---\r\ntitle: Dark mode taste\r\nproject: alpha\r\nsource: manual note\r\n---\r\n# Dark mode taste\r\n\r\nSam prefers charcoal backgrounds with terracotta accents.\r\n';
   const misplaced = await saveFromEditor(config, 'Agents/Memory/Projects/alpha/dark-mode.md', wrongWorkspaceBody, 'new');
   const existing = await saveFromEditor(config, 'Agents/Memory/Projects/personal/already-here.md', '---\r\ntitle: Existing\r\nproject: personal\r\nsource: manual\r\n---\r\n# Existing\r\n\r\nAlready in personal workspace.\r\n', 'new');
   const ownerNote = await readNote(config, 'Owner/Policies.md');
@@ -252,7 +252,7 @@ test('runMemoryOptimization relocates misplaced notes cleanly and enforces move 
               targetWorkspace: 'personal',
               targetPath: 'Agents/Memory/Projects/personal/dark-mode.md',
               reason: 'Personal UI preference saved inside alpha project',
-              content: '---\ntitle: Dark mode taste\nproject: alpha\nsource: manual note\n---\n# Dark mode taste\n\nAlex prefers warm charcoal surfaces with terracotta accents.\n',
+              content: '---\ntitle: Dark mode taste\nproject: alpha\nsource: manual note\n---\n# Dark mode taste\n\nSam prefers warm charcoal surfaces with terracotta accents.\n',
             },
             {
               type: 'move',

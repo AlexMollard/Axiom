@@ -43,7 +43,7 @@ async function failed(config, error) {
     try { writeFileSync(temporary, randomUUID() + '\r\n'); await fs.rename(temporary, marker); }
     finally { try { unlinkSync(temporary); } catch {} }
   } catch {}
-  console.warn(`Shared Brain usage tracking unavailable: ${error.message}`);
+  console.warn(`Axiom usage tracking unavailable: ${error.message}`);
   return {healthy: false, reason: `Usage tracking unavailable: ${error.message}`};
 }
 function insertInventory(db, notes, now) {

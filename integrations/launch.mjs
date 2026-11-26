@@ -20,12 +20,12 @@ try {
   }
   if (!executable) throw new Error(`Cannot find native ${filename} on PATH`);
   const child = spawn(executable, args, { cwd: process.cwd(), env: process.env, stdio: 'inherit', shell: false });
-  child.on('error', error => { console.error(`Shared Brain launcher: ${error.message}`); process.exitCode = 1; });
+  child.on('error', error => { console.error(`Axiom launcher: ${error.message}`); process.exitCode = 1; });
   child.on('exit', (code, signal) => {
     if (signal) { try { process.kill(process.pid, signal); } catch { process.exitCode = 1; } }
     else process.exitCode = code ?? 1;
   });
 } catch (error) {
-  console.error(`Shared Brain preflight: ${error.message}`);
+  console.error(`Axiom preflight: ${error.message}`);
   process.exitCode = 1;
 }

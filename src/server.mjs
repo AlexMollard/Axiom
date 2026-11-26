@@ -396,7 +396,7 @@ if (process.argv[1]) {
   catch { /* Imported with a missing or non-file argv entry. */ }
 }
 if (isEntrypoint) {
-  const requestedConfig = path.resolve(process.argv[2] || process.env.SHARED_BRAIN_CONFIG || path.join(process.env.LOCALAPPDATA || path.join(os.homedir(), '.config'), 'Axiom', 'config.json'));
+  const requestedConfig = path.resolve(process.argv[2] || process.env.AXIOM_CONFIG || process.env.SHARED_BRAIN_CONFIG || path.join(process.env.LOCALAPPDATA || path.join(os.homedir(), '.config'), 'Axiom', 'config.json'));
   let configPath;
   try { configPath = realpathSync.native(requestedConfig); }
   catch (error) {
@@ -455,7 +455,7 @@ if (isEntrypoint) {
   const shutdown = signal => {
     if (shuttingDown) return;
     shuttingDown = true;
-    console.log(`Shared Brain shutting down on ${signal}`);
+    console.log(`Axiom shutting down on ${signal}`);
     const fallback = setTimeout(() => process.exit(0), 3000);
     fallback.unref?.();
     clearInterval(interval);
@@ -471,5 +471,5 @@ if (isEntrypoint) {
   };
   process.once('SIGINT', () => shutdown('SIGINT'));
   process.once('SIGTERM', () => shutdown('SIGTERM'));
-  console.log(`Shared Brain: http://127.0.0.1:${config.port}`);
+  console.log(`Axiom: http://127.0.0.1:${config.port}`);
 }

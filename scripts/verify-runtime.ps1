@@ -9,7 +9,7 @@ $node = (Get-Command node -ErrorAction Stop).Source
 $pwsh = (Get-Command pwsh -ErrorAction Stop).Source
 $taskHost = Join-Path $env:SystemRoot 'System32/conhost.exe'
 if (-not $EvidenceDir) {
-  $privateConfig = if ($env:SHARED_BRAIN_CONFIG) { $env:SHARED_BRAIN_CONFIG } else { Join-Path $env:LOCALAPPDATA 'Axiom/config.json' }
+  $privateConfig = if ($env:AXIOM_CONFIG) { $env:AXIOM_CONFIG } elseif ($env:SHARED_BRAIN_CONFIG) { $env:SHARED_BRAIN_CONFIG } else { Join-Path $env:LOCALAPPDATA 'Axiom/config.json' }
   $EvidenceDir = Join-Path (Join-Path (Split-Path -Parent ([IO.Path]::GetFullPath($privateConfig))) '.state') ('qualification-' + [DateTime]::UtcNow.ToString('yyyyMMddTHHmmssfffZ') + '-' + [guid]::NewGuid().ToString('N').Substring(0, 8))
 }
 $EvidenceDir = [IO.Path]::GetFullPath($EvidenceDir)

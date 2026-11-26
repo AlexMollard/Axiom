@@ -556,7 +556,7 @@ function buildBatchPrompt({ workspace, availableWorkspaces, batchIndex, totalBat
   }));
 
   return [
-    'You are Axiom Memory Optimizer, a high-intelligence curator for Alex Mollard\'s Shared Brain vault.',
+    'You are Axiom Memory Optimizer, a high-intelligence curator for the owner\'s Axiom vault.',
     `Workspace scope: ${workspace} (batch ${batchIndex + 1} of ${totalBatches}).`,
     `Available workspaces (relocate misplaced notes to the right one):\n${JSON.stringify(availableWorkspaces)}`,
     repoSummary.length ? `Mapped repo roots:\n${repoSummary.join('\n')}` : 'Mapped repo roots: none',
@@ -954,7 +954,7 @@ export async function runMemoryOptimization(config, options = {}) {
   const gitCommitCache = new Map();
   const projectMap = new Map(config.projects.map(p => [p.id, p]));
   const availableWorkspaces = [
-    { id: 'personal', name: config.workspaceNames?.personal || 'Personal', folder: 'Agents/Memory/Projects/personal/', purpose: 'Alex Mollard personal preferences, writing/visual/theme taste, accessibility, personal identity and non-project user facts' },
+    { id: 'personal', name: config.workspaceNames?.personal || 'Personal', folder: 'Agents/Memory/Projects/personal/', purpose: 'The owner\'s personal preferences, writing/visual/theme taste, accessibility, personal identity and non-project user facts' },
     { id: 'global', name: config.workspaceNames?.global || 'General', folder: 'Agents/Memory/General/', purpose: 'Cross-project engineering workflows, harness/tooling procedures, vault operational rules' },
     ...config.projects.map(p => ({ id: p.id, name: p.name || p.id, folder: `Agents/Memory/Projects/${p.id}/`, roots: [p.root, ...(p.additionalRoots || [])] })),
   ];

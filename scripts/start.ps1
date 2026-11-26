@@ -4,7 +4,7 @@ param([switch]$Register, [switch]$Unregister, [switch]$Restart, [switch]$TakeOve
 $ErrorActionPreference = 'Stop'
 $root = Split-Path -Parent $PSScriptRoot
 if (-not $ConfigPath) {
-  $ConfigPath = if ($env:SHARED_BRAIN_CONFIG) { $env:SHARED_BRAIN_CONFIG } else {
+  $ConfigPath = if ($env:AXIOM_CONFIG) { $env:AXIOM_CONFIG } elseif ($env:SHARED_BRAIN_CONFIG) { $env:SHARED_BRAIN_CONFIG } else {
     $data = if ($env:LOCALAPPDATA) { $env:LOCALAPPDATA } else { Join-Path ([Environment]::GetFolderPath('UserProfile')) '.config' }
     Join-Path $data 'Axiom/config.json'
   }
@@ -248,4 +248,4 @@ while (-not (Ready) -and [DateTime]::UtcNow -lt $deadline) {
   Start-Sleep -Milliseconds 250
 }
 if (-not (Ready)) { throw "Axiom is not responding. Inspect $state/server.log." }
-Write-Output "Shared Brain ready: $url"
+Write-Output "Axiom ready: $url"

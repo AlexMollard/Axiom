@@ -46,7 +46,7 @@ async function configured(home, id) {
       const target = path.join(root, 'integrations', 'omp.ts');
       const valid = !!match && (match[1].startsWith('file:') ? fileURLToPath(match[1]) : path.resolve(path.dirname(file), match[1])) === target;
       if (valid) await fs.access(target);
-      return { configured: valid, source: file, detail: valid ? 'Extension wrapper points to the Shared Brain integration.' : 'Extension wrapper does not point to the Shared Brain integration.' };
+      return { configured: valid, source: file, detail: valid ? 'Extension wrapper points to the Axiom integration.' : 'Extension wrapper does not point to the Axiom integration.' };
     }
     const file = path.join(home, '.claude', 'settings.json');
     const settings = JSON.parse(await fs.readFile(file, 'utf8'));
@@ -58,7 +58,7 @@ async function configured(home, id) {
       return matcher && (group.hooks || []).some(handler => handler.type === 'command' && handler.command === command);
     }));
     const disabled = settings.disableAllHooks === true;
-    return { configured: !disabled && missing.length === 0, source: file, detail: disabled ? 'All Claude hooks are disabled.' : missing.length ? `Missing configured hooks: ${missing.join(', ')}.` : 'All four Shared Brain hooks are configured.' };
+    return { configured: !disabled && missing.length === 0, source: file, detail: disabled ? 'All Claude hooks are disabled.' : missing.length ? `Missing configured hooks: ${missing.join(', ')}.` : 'All four Axiom hooks are configured.' };
   } catch (error) { return { configured: false, detail: `Configuration unavailable: ${error.message}` }; }
 }
 
