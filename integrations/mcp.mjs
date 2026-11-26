@@ -8,6 +8,7 @@ import {z} from 'zod';
 import {loadConfig, policies, readNote, search, writeNote} from '../src/memory.mjs';
 import {searchWorkspaceIcons, WORKSPACE_ICONS_PATH} from '../src/workspace-icons.mjs';
 
+const {version} = JSON.parse(await fs.readFile(new URL('../package.json', import.meta.url), 'utf8'));
 const usage = {source: 'mcp'};
 const text = value => typeof value === 'string'
   ? {content: [{type: 'text', text: value}]}
@@ -36,7 +37,7 @@ export function createMcpServer(config, {cwd = process.cwd()} = {}) {
     if (typeof effective !== 'string' || !path.isAbsolute(effective)) throw new Error('MCP cwd must be an absolute path.');
     return effective;
   };
-  const server = new McpServer({name: 'axiom-memory', version: '1.3.0'}, {maxToolInputElements: 100});
+  const server = new McpServer({name: 'axiom-memory', version}, {maxToolInputElements: 100});
   const register = (name, description, inputSchema, action) => server.registerTool(name, {description, inputSchema}, async (args, extra) => {
     try { return text(await action(args, extra.signal)); }
     catch (error) { return {isError: true, content: [{type: 'text', text: error.message}]}; }

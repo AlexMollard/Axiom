@@ -107,7 +107,7 @@ npm run desktop:release
 ```
 
 After changing the desktop icon artwork, run `npm run desktop:icons` before packaging. The generator verifies that the Windows icon contains every size from 16 to 256 pixels used by the package.
-The app, Windows taskbar, and installer artwork are generated from the same flat copper mark.
+The app, Windows taskbar, and installer artwork are generated from the same Keystone mark: a light "A" with a clay full stop on a neutral charcoal tile.
 The main window picks a frame from the Windows icon resource at its monitor's DPI.
 
 Opening `Setup.exe` without arguments shows the Axiom-themed Install, Update, Repair, or Downgrade confirmation. The launcher uses Velopack for the installation and opens Axiom after success. Command-line arguments, including `--silent` and `--installto`, go directly to the embedded Velopack installer. In-app updates still use Velopack directly. The Windows build uses the .NET Framework C# compiler already provided by Windows.

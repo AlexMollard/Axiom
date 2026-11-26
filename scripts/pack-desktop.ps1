@@ -143,7 +143,7 @@ try {
     '--mainExe', 'axiom.exe',
     '--icon', $iconPath,
     '--splashImage', (Join-Path $root 'src-tauri\icons\setup-splash.png'),
-    '--splashProgressColor', '#D39476',
+    '--splashProgressColor', '#DD8F68',
     '--outputDir', $resolvedOutDir,
     '--runtime', 'win-x64',
     '--aumid', 'com.alexmollard.axiom',
