@@ -262,17 +262,14 @@ pub fn run() {
                 WebviewUrl::App("index.html".into())
             };
 
-            let mut main_builder = WebviewWindowBuilder::new(app, "main", main_url)
+            let main_win = WebviewWindowBuilder::new(app, "main", main_url)
                 .title("Axiom")
                 .inner_size(1360.0, 880.0)
                 .min_inner_size(860.0, 560.0)
                 .decorations(false)
                 .visible(false)
-                .background_color(tauri::window::Color(0x18, 0x17, 0x16, 0xff));
-            if let Ok(icon) = tauri::image::Image::from_bytes(include_bytes!("../icons/128x128.png")) {
-                main_builder = main_builder.icon(icon)?;
-            }
-            let main_win = main_builder.build()?;
+                .background_color(tauri::window::Color(0x18, 0x17, 0x16, 0xff))
+                .build()?;
             win_native::apply_win11_window_polish(&main_win);
             win_native::attach_webview_crash_recovery(&main_win, format!("{base_url}/"));
 
@@ -305,6 +302,8 @@ pub fn run() {
                     }
                 }
             }
+            #[cfg(windows)]
+            win_native::refresh_main_window_icon(&main_win);
             if !prefs.start_minimized || force_show_main {
                 let _ = main_win.show();
             }
@@ -312,6 +311,10 @@ pub fn run() {
             let handle_for_events = app.handle().clone();
             let main_win_for_events = main_win.clone();
             main_win.on_window_event(move |event| match event {
+                #[cfg(windows)]
+                WindowEvent::ScaleFactorChanged { .. } => {
+                    win_native::refresh_main_window_icon(&main_win_for_events);
+                }
                 WindowEvent::Resized(_) | WindowEvent::Moved(_) => {
                     schedule_bounds_save(&handle_for_events, &main_win_for_events);
                 }

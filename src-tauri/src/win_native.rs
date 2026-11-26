@@ -230,6 +230,23 @@ pub fn render_badge_rgba(count: usize) -> Option<Vec<u8>> {
     Some(buf)
 }
 
+#[cfg(windows)]
+pub fn refresh_main_window_icon(window: &WebviewWindow) {
+    use windows_sys::Win32::UI::{
+        HiDpi::{GetDpiForWindow, GetSystemMetricsForDpi},
+        WindowsAndMessaging::SM_CXICON,
+    };
+
+    let Ok(hwnd) = window.hwnd() else { return };
+    let dpi = unsafe { GetDpiForWindow(hwnd.0) };
+    let size = unsafe { GetSystemMetricsForDpi(SM_CXICON, dpi) };
+    if size > 0 {
+        if let Ok(icon) = tauri::image::Image::from_app_icon_resource(size as u32) {
+            let _ = window.set_icon(icon);
+        }
+    }
+}
+
 pub fn update_taskbar_badge(app: &AppHandle, pending_count: usize) {
     if let Some(main_win) = app.get_webview_window("main") {
         let icon = render_badge_rgba(pending_count)

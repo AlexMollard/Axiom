@@ -33,6 +33,10 @@ if ([string]$tauriConf.version -cne $version) {
 $npm = (Get-Command npm.cmd -ErrorAction SilentlyContinue | Select-Object -First 1 -ExpandProperty Source)
 if (-not $npm) { $npm = (Get-Command npm -ErrorAction Stop).Source }
 $vpk = (Get-Command vpk -ErrorAction Stop).Source
+$setupCompiler = Join-Path $env:WINDIR 'Microsoft.NET\Framework64\v4.0.30319\csc.exe'
+if (-not (Test-Path -LiteralPath $setupCompiler -PathType Leaf)) {
+  throw 'The Windows .NET Framework C# compiler is required to build Axiom Setup.'
+}
 
 $token = $GitHubToken
 if (-not $token) { $token = $env:AXIOM_GITHUB_TOKEN }
@@ -138,6 +142,8 @@ try {
     '--packDir', $stageDir,
     '--mainExe', 'axiom.exe',
     '--icon', $iconPath,
+    '--splashImage', (Join-Path $root 'src-tauri\icons\setup-splash.png'),
+    '--splashProgressColor', '#D39476',
     '--outputDir', $resolvedOutDir,
     '--runtime', 'win-x64',
     '--aumid', 'com.alexmollard.axiom',
@@ -152,6 +158,18 @@ try {
   if ($LASTEXITCODE -ne 0) { throw "vpk pack failed with exit code $LASTEXITCODE" }
 
   $setupExe = Join-Path $resolvedOutDir 'AxiomDesktop-win-Setup.exe'
+  $setupVersionFile = Join-Path $stageDir 'SetupVersion.cs'
+  $themedSetup = Join-Path $resolvedOutDir ".axiom-setup-$([guid]::NewGuid()).exe"
+  [IO.File]::WriteAllText($setupVersionFile, "[assembly: System.Reflection.AssemblyVersion(`"$version`")]")
+  try {
+    & $setupCompiler /nologo /target:winexe /optimize+ /codepage:65001 "/out:$themedSetup" "/win32icon:$iconPath" `
+      "/resource:$setupExe,Axiom.VelopackSetup" "/resource:$root\src-tauri\icons\128x128.png,Axiom.Emblem" `
+      /reference:System.Drawing.dll /reference:System.Windows.Forms.dll (Join-Path $PSScriptRoot 'AxiomSetup.cs') $setupVersionFile
+    if ($LASTEXITCODE -ne 0) { throw "Axiom Setup launcher build failed with exit code $LASTEXITCODE" }
+    [IO.File]::Move($themedSetup, $setupExe, $true)
+  } finally {
+    [IO.File]::Delete($themedSetup)
+  }
   Write-Output "Velopack release ready: $setupExe"
 
   if ($Install) {

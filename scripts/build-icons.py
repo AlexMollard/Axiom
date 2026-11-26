@@ -1,11 +1,10 @@
 import base64
 from pathlib import Path
-from PIL import Image, ImageChops, ImageDraw, ImageFilter
+from PIL import Image, ImageDraw, ImageFilter
 
 ROOT = Path(__file__).resolve().parent.parent
 ICONS_DIR = ROOT / "src-tauri" / "icons"
 PUBLIC_DIR = ROOT / "client" / "public"
-SOURCE = ICONS_DIR / "icon-source.png"
 
 
 def make_squircle_mask(size: int, ss: int = 4, exponent: float = 4.6, margin: float = 0.04) -> Image.Image:
@@ -33,31 +32,6 @@ def make_squircle_mask(size: int, ss: int = 4, exponent: float = 4.6, margin: fl
     return mask.resize((size, size), Image.Resampling.LANCZOS)
 
 
-def apply_squircle_and_rim(img: Image.Image, size: int = 1024) -> Image.Image:
-    w, h = img.size
-    side = min(w, h)
-    left = (w - side) // 2
-    top = (h - side) // 2
-    cropped = img.crop((left, top, left + side, top + side)).convert("RGBA")
-    if side != size:
-        cropped = cropped.resize((size, size), Image.Resampling.LANCZOS)
-
-    mask = make_squircle_mask(size)
-
-    # Create a subtle inner warm rim highlight along the squircle edge
-    eroded = mask.filter(ImageFilter.MinFilter(5))
-    rim_alpha = ImageChops.subtract(mask, eroded)
-    rim_alpha = rim_alpha.point(lambda a: int(a * 0.28))
-
-    rim_layer = Image.new("RGBA", (size, size), (239, 185, 157, 0))
-    rim_layer.putalpha(rim_alpha)
-
-    out = Image.new("RGBA", (size, size), (0, 0, 0, 0))
-    out.paste(cropped, (0, 0), mask)
-    out = Image.alpha_composite(out, rim_layer)
-    return out
-
-
 def render_size(master: Image.Image, size: int) -> Image.Image:
     resized = master.resize((size, size), Image.Resampling.LANCZOS)
     if size <= 48:
@@ -72,13 +46,25 @@ def render_size(master: Image.Image, size: int) -> Image.Image:
 
 
 def main() -> None:
-    if not SOURCE.is_file():
-        raise SystemExit(f"Missing master icon: {SOURCE}")
-
     ICONS_DIR.mkdir(parents=True, exist_ok=True)
     PUBLIC_DIR.mkdir(parents=True, exist_ok=True)
 
-    master = apply_squircle_and_rim(Image.open(SOURCE), 1024)
+    # Keystone mark, drawn in 100-unit design space at 4x and downsampled for smooth edges
+    scale = 2048 / 100
+    art = Image.new("RGBA", (2048, 2048), "#161616")
+    mark = ImageDraw.Draw(art)
+    mark.polygon(
+        [(x * scale, y * scale) for x, y in [(22, 76), (40, 24), (52, 24), (70, 76), (59.5, 76),
+                                             (55.8, 65), (36.2, 65), (32.5, 76)]],
+        fill="#f0f0ef",
+    )
+    mark.polygon([(x * scale, y * scale) for x, y in [(39.4, 56), (52.6, 56), (46, 37)]], fill="#161616")
+    mark.rounded_rectangle((73 * scale, 67 * scale, 82 * scale, 76 * scale), radius=1.5 * scale, fill="#dd8f68")
+    art = art.resize((512, 512), Image.Resampling.LANCZOS)
+
+    master = Image.new("RGBA", (512, 512), "#343434")  # rim left showing around the inner tile
+    master.paste(art, (0, 0), make_squircle_mask(512, margin=0.064))
+    master.putalpha(make_squircle_mask(512))
 
     render_size(master, 32).save(ICONS_DIR / "32x32.png", format="PNG", optimize=True)
     render_size(master, 128).save(ICONS_DIR / "128x128.png", format="PNG", optimize=True)
@@ -86,14 +72,23 @@ def main() -> None:
     render_size(master, 512).save(ICONS_DIR / "icon.png", format="PNG", optimize=True)
     render_size(master, 64).save(PUBLIC_DIR / "axiom-icon.png", format="PNG", optimize=True)
 
+    splash = Image.new("RGB", (480, 280), "#161616")
+    emblem = render_size(master, 184)
+    splash.paste(emblem, (148, 48), emblem)
+    splash.save(ICONS_DIR / "setup-splash.png", format="PNG", optimize=True)
+
     ico_sizes = [(16, 16), (24, 24), (32, 32), (48, 48), (64, 64), (128, 128), (256, 256)]
-    ico_frames = [render_size(master, s[0]) for s in ico_sizes]
-    ico_frames[0].save(
+    ico_frames = [render_size(master, size) for size, _ in ico_sizes]
+    # Pillow discards sizes larger than the primary image.
+    ico_frames[-1].save(
         ICONS_DIR / "icon.ico",
         format="ICO",
-        append_images=ico_frames[1:],
+        append_images=ico_frames[:-1],
         sizes=ico_sizes,
     )
+    with Image.open(ICONS_DIR / "icon.ico") as icon:
+        if icon.ico.sizes() != set(ico_sizes):
+            raise ValueError("Windows icon is missing required sizes.")
 
     icon_bytes = (PUBLIC_DIR / "axiom-icon.png").read_bytes()
     b64 = base64.b64encode(icon_bytes).decode("ascii")
