@@ -1,6 +1,6 @@
 #requires -Version 7
 [CmdletBinding()]
-param([switch]$Register, [switch]$Unregister, [switch]$Open, [switch]$Restart, [switch]$TakeOver, [switch]$Health, [switch]$TaskLaunch, [string]$ConfigPath)
+param([switch]$Register, [switch]$Unregister, [switch]$Restart, [switch]$TakeOver, [switch]$Health, [switch]$TaskLaunch, [string]$ConfigPath)
 $ErrorActionPreference = 'Stop'
 $root = Split-Path -Parent $PSScriptRoot
 if (-not $ConfigPath) {
@@ -249,4 +249,3 @@ while (-not (Ready) -and [DateTime]::UtcNow -lt $deadline) {
 }
 if (-not (Ready)) { throw "Axiom is not responding. Inspect $state/server.log." }
 Write-Output "Shared Brain ready: $url"
-if ($Open) { Start-Process $url }

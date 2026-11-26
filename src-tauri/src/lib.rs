@@ -254,7 +254,8 @@ pub fn run() {
                 _ => "/",
             };
             let main_url = if status.healthy {
-                let parsed: url::Url = format!("{base_url}{initial_route}")
+                let sep = if initial_route.contains('?') { '&' } else { '?' };
+                let parsed: url::Url = format!("{base_url}{initial_route}{sep}desktopMode=main")
                     .parse()
                     .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidInput, e))?;
                 WebviewUrl::External(parsed)

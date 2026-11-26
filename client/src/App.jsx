@@ -1,5 +1,5 @@
 import React, { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { ArrowRight, ArrowUpRight, Bot, Check, ChevronDown, ChevronRight, FileText, FolderKanban, LayoutDashboard, List, Network, Plus, RefreshCw, Search, ShieldCheck, UserRound, Inbox, Undo2, Trash2, Settings, Activity, Plug, DatabaseBackup, Command, ScanSearch, Columns2, X } from 'lucide-react';
+import { ArrowRight, ArrowUpRight, Bot, Check, ChevronDown, ChevronRight, FileText, FolderKanban, LayoutDashboard, List, Network, Plus, RefreshCw, Search, ShieldCheck, UserRound, Inbox, Undo2, Trash2, Settings, Activity, Plug, DatabaseBackup, Command, ScanSearch, X } from 'lucide-react';
 import WorkspaceIcon, { registerWorkspaceIconNodes } from './WorkspaceIcon.jsx';
 import { SearchResults, CommandPalette } from './SearchExperience.jsx';
 import { ReviewInbox, ReviewDiff } from './ReviewInbox.jsx';
@@ -7,7 +7,6 @@ import { NoteKnowledge } from './KnowledgeViews.jsx';
 import Notifications from './Notifications.jsx';
 import { UsageSummary } from './UsageViews.jsx';
 import TitleBar from './TitleBar.jsx';
-import TabBar from './TabBar.jsx';
 import StatusBar from './StatusBar.jsx';
 import InNoteFind from './InNoteFind.jsx';
 import OpenInMenu from './OpenInMenu.jsx';
@@ -56,7 +55,6 @@ const reviewLabel = note => note.owner === 'owner' ? 'Owner' : note.reviewStatus
 const proposal = note => note.path.startsWith('Agents/Proposals/');
 const latest = notes => [...notes].sort((a, b) => b.updated.localeCompare(a.updated) || a.path.localeCompare(b.path));
 const noteUrl = path => '/?note=' + encodeURIComponent(path);
-const obsidianUrl = (vault, path = 'Home.md') => `obsidian://open?vault=${encodeURIComponent(vault)}&file=${encodeURIComponent(path)}`;
 
 function routeFrom(url = new URL(location.href)) {
   const p = url.searchParams;
@@ -156,14 +154,7 @@ function Reader({
       <header className="reader-heading">
         <div><p className="eyebrow">Knowledge / Note</p><h1 id={parsed.titleId || undefined}>{note.title}</h1><div className="reader-flags"><span className="badge">{reviewLabel(note)}</span>{['archived', 'superseded'].includes((note.status || '').toLowerCase()) && <span className="badge">{note.status}</span>}<span>Updated {time(note.updated)}</span></div></div>
         <div className="heading-actions">
-          {isDesktop() ? (
-            <OpenInMenu path={note.path} title={note.title} vaultName={vaultName} onOpenSplit={onOpenSplit} />
-          ) : (
-            <>
-              <a className="button button-soft" href={obsidianUrl(vaultName, note.path)}>Open in Obsidian <ArrowUpRight size={18} strokeWidth={1.7} aria-hidden="true" /></a>
-              {onOpenSplit && <button type="button" className="button" onClick={() => onOpenSplit({ kind: 'note', path: note.path })}><Columns2 size={16} aria-hidden="true" /> Split</button>}
-            </>
-          )}
+          <OpenInMenu path={note.path} title={note.title} vaultName={vaultName} onOpenSplit={onOpenSplit} />
           <a className="button button-primary" href={routeUrl({ kind: 'note', path: note.path, edit: true, ...reviewScope })}>Edit</a>
           {note.deleteBlockedReason || ['Owner/Policies.md', 'Owner/Preferences.md', 'Owner/Reviews.md', 'Agents/Workspace icons.md'].includes(note.path) ? <span className="muted">Deletion unavailable: {note.deleteBlockedReason || 'This note is protected.'}</span> : <button className="button danger-button" onClick={onDelete}>Delete</button>}
         </div>
@@ -1097,17 +1088,6 @@ function MainApp({ detached = false }) {
                 <a className="button button-primary" href="/?edit=1"><Plus size={18} strokeWidth={1.7} aria-hidden="true" /> New note</a>
               </div>
             </header>
-            {!isDesktop() && (
-              <TabBar
-                tabs={tabs}
-                activeId={activeTabId}
-                splitOpen={Boolean(splitRoute)}
-                onSelectTab={selectTab}
-                onCloseTab={handleCloseTab}
-                onNewTab={() => navigate({ kind: 'overview' }, 'push', true, { newTab: true })}
-                onToggleSplit={toggleSplit}
-              />
-            )}
           </>
         )}
         <div

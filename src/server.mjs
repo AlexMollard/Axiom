@@ -35,6 +35,11 @@ const headers = {
   'Content-Security-Policy': "default-src 'none'; script-src 'self'; style-src 'self'; font-src 'self'; img-src 'self' data:; connect-src 'self' ipc: http://ipc.localhost; base-uri 'none'; form-action 'none'; frame-ancestors 'none'",
 };
 
+const desktopOnlyPage = nonce => `<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Axiom</title>
+<style nonce="${nonce}">body{margin:0;min-height:100vh;display:grid;place-items:center;background:#161616;color:#f0f0ef;font:15px/1.6 system-ui,sans-serif}main{max-width:440px;padding:32px;text-align:center}img{width:72px;height:72px}h1{font-size:22px;margin:16px 0 8px}p{color:#cfcfcd;margin:0 0 8px}code{color:#f3b896}</style></head>
+<body><main><img src="/axiom-icon.png" alt=""><h1>Axiom is a desktop app</h1><p>Open the Axiom app from the Start menu or tray to read and edit your vault.</p><p>This local server still powers the app, the <code>axiom-memory</code> CLI and the MCP integration.</p></main></body></html>`;
+
 function noteHref(note, target, wiki = false) {
   const fragment = target.includes('#') ? target.slice(target.indexOf('#') + 1) : '';
   let decoded = fragment;
@@ -268,10 +273,15 @@ export function createServer(config, configId = null) {
       }
       if (url.pathname === '/' || url.pathname === '/index.html') {
         const nonce = randomBytes(18).toString('base64');
+        const csp = { 'Content-Security-Policy': headers['Content-Security-Policy'].replace("style-src 'self'", `style-src 'self' 'nonce-${nonce}'`) };
+        // The UI ships only inside the desktop shell, whose windows open with ?desktopMode=…; a cookie keeps later reloads working.
+        // shortcut: this hides the UI from ordinary browsers but is not access control; the loopback API stays open as before.
+        const fromShell = url.searchParams.has('desktopMode') || /(?:^|;\s*)axiom_shell=desktop(?:;|$)/.test(req.headers.cookie || '');
+        if (!fromShell) return send(200, 'text/html; charset=utf-8', desktopOnlyPage(nonce), csp);
         let html;
         try { html = await readFile(path.join(buildDir, 'index.html'), 'utf8'); }
         catch (error) { if (error.code !== 'ENOENT') throw error; return json(503, { error: 'Frontend build is missing. Run npm run build.' }); }
-        return send(200, 'text/html; charset=utf-8', html.replaceAll('__STYLE_NONCE__', nonce), { 'Content-Security-Policy': headers['Content-Security-Policy'].replace("style-src 'self'", `style-src 'self' 'nonce-${nonce}'`) });
+        return send(200, 'text/html; charset=utf-8', html.replaceAll('__STYLE_NONCE__', nonce), { ...csp, 'Set-Cookie': 'axiom_shell=desktop; Path=/; Max-Age=31536000; SameSite=Strict; HttpOnly' });
       }
       if (/^\/assets\/[a-zA-Z0-9_.-]+$/.test(url.pathname) || /^\/licenses\/(?:Manrope|JetBrains-Mono)-OFL\.txt$/.test(url.pathname) || url.pathname === '/axiom-icon.png') {
         const type = assetTypes[path.extname(url.pathname)];

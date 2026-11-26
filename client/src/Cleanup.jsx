@@ -2,7 +2,7 @@ import React, { useEffect, useRef, useState } from 'react';
 import { ScanSearch, Trash2 } from 'lucide-react';
 import { DeleteNote } from './Management.jsx';
 import { decisionKey, readDecisions, writeDecisions, buildHandoff } from './cleanup-review.mjs';
-import { apiMutate, isDesktop, readBucketState, revealInExplorer, saveFileNative, writeBucketState } from './desktop-bridge.mjs';
+import { apiMutate, readBucketState, revealInExplorer, saveFileNative, writeBucketState } from './desktop-bridge.mjs';
 import CleanupReview from './CleanupReview.jsx';
 import CleanupAnalysis from './CleanupAnalysis.jsx';
 import MemoryOptimizer from './MemoryOptimizer.jsx';
@@ -77,7 +77,7 @@ export default function Cleanup({ groups, vaultId, onCatalogChanged, onOpenSplit
       writeBucketState('cleanup', `decisions-${vaultId}`, JSON.stringify(next)).catch(() => {});
     }
     try { writeDecisions(window.localStorage, vaultId, next); setStorageError(''); }
-    catch { if (!isDesktop()) setStorageError('Browser storage is unavailable for this vault. Decisions remain in this session only.'); }
+    catch {}
     setHandoff('');
   }
   async function saveHandoffNative() {
@@ -170,7 +170,7 @@ export default function Cleanup({ groups, vaultId, onCatalogChanged, onOpenSplit
         <button type="button" className="button button-primary" onClick={copyHandoff} disabled={busy || !vaultId}>Copy JSON handoff</button>
       </div>
       <p className="cleanup-meta">The handoff contains private paths and evidence. Share it only with a trusted agent. It does not execute changes.</p>
-      {handoff && <div className="cleanup-handoff"><label htmlFor="cleanup-handoff-json">Handoff JSON (select and copy if needed)</label><textarea id="cleanup-handoff-json" readOnly value={handoff} onFocus={e => e.target.select()} /><div className="cleanup-analysis-actions">{isDesktop() ? <button type="button" className="button" onClick={saveHandoffNative}>Save JSON to file</button> : <a className="button" download="cleanup-handoff.json" href={'data:application/json;charset=utf-8,' + encodeURIComponent(handoff)}>Download JSON</a>}{savedFilePath && <button type="button" className="button" onClick={() => revealInExplorer('file', savedFilePath)}>Reveal in Explorer</button>}</div><p role="status">{copyStatus}</p></div>}
+      {handoff && <div className="cleanup-handoff"><label htmlFor="cleanup-handoff-json">Handoff JSON (select and copy if needed)</label><textarea id="cleanup-handoff-json" readOnly value={handoff} onFocus={e => e.target.select()} /><div className="cleanup-analysis-actions"><button type="button" className="button" onClick={saveHandoffNative}>Save JSON to file</button>{savedFilePath && <button type="button" className="button" onClick={() => revealInExplorer('file', savedFilePath)}>Reveal in Explorer</button>}</div><p role="status">{copyStatus}</p></div>}
       <CleanupAnalysis vaultId={vaultId} workspace={workspace} items={items} decisions={decisions} scan={result} scanning={busy} />
       <p className="cleanup-meta" role="status">Scanned {result.scannedNotes.toLocaleString()} notes · {new Date(result.scannedAt).toLocaleString()}</p>
       {result.semantic && !semanticError && phase !== 'semantic' && <p className="cleanup-meta" role="status">{semanticSummary(result.semantic)}{result.semantic.state !== 'not-requested' && (result.semantic.incomplete || result.semantic.state === 'incomplete' || result.semantic.state === 'unavailable' || result.semantic.state === 'error') ? ' Lexical results remain available.' : ''}</p>}

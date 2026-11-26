@@ -290,9 +290,7 @@ export default function MarkdownEditor({
     try {
       writeDraft(window.localStorage, key, draft);
       setStorageError('');
-    } catch (err) {
-      if (!isDesktop()) setStorageError(err.message || 'Could not store your local draft.');
-    }
+    } catch {}
   }, []);
 
   const removeDraftNow = useCallback(key => {
@@ -301,9 +299,7 @@ export default function MarkdownEditor({
     try {
       discardDraft(window.localStorage, key);
       setStorageError('');
-    } catch (err) {
-      if (!isDesktop()) setStorageError(err.message || 'Could not remove the local draft.');
-    }
+    } catch {}
   }, []);
 
   useEffect(() => {
